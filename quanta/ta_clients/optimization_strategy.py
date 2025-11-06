@@ -5,7 +5,7 @@ import optuna
 from quanta.utils.ta import SMA, RSI, MACD, BollingerBands, INDICATOR_CLASSES
 
 
-# Configuration JSON avec structure logique
+# Configuration JSON with logical structure
 OPTIMIZATION_CONFIG = {
     "strategy_name": "simple_strategy",
     "indicators": {
@@ -44,8 +44,8 @@ OPTIMIZATION_CONFIG = {
             "params": {
                 "period": {
                     "type": "int",
-                    "low": 10,    # ← Minimum (très réactif)
-                    "high": 30      # ← Maximum (plus stable)
+                    "low": 10,    # ← Minimum (very reactive)
+                    "high": 30      # ← Maximum (more stable)
                 }
             }
         },
@@ -105,32 +105,32 @@ OPTIMIZATION_CONFIG = {
         },
         "macd_hist_buy_threshold": {
             "type": "float",
-            "low": -1.0,  # Élargi pour être moins restrictif (permet plus de signaux)
+            "low": -1.0,  # Widened to be less restrictive (allows more signals)
             "high": 0.5,
-            "description": "Seuil MACD_hist pour éviter d'acheter pendant chute libre (doit être > cette valeur). Valeur plus basse = moins restrictif."
+            "description": "MACD_hist threshold to avoid buying during free fall (must be > this value). Lower value = less restrictive."
         },
         "macd_hist_sell_threshold": {
             "type": "float",
             "low": -0.5,
-            "high": 1.0,  # Élargi pour être moins restrictif (permet plus de signaux)
-            "description": "Seuil MACD_hist pour éviter de vendre pendant montée forte (doit être < cette valeur). Valeur plus haute = moins restrictif."
+            "high": 1.0,  # Widened to be less restrictive (allows more signals)
+            "description": "MACD_hist threshold to avoid selling during strong rise (must be < this value). Higher value = less restrictive."
         }
     },
     "constraints": [
         
-        # 1. basis contrainte : 
-        {"condition": "SMA_long_period >= SMA_short_period + 50"}, # Assurer que la période courte est inférieure à la période longue et Forcer une VRAIE différence entre les SMA
-        {"condition": "MACD_fast_period < MACD_slow_period"}, # (convention) C'est une convention en analyse technique, EMA rapide doit être inférieure à EMA lente. Le MACD (Moving Average Convergence Divergence) compare deux moyennes mobiles exponentielles (EMA) de différentes périodes pour identifier les tendances et les points de retournement potentiels dans le prix d'un actif.
-        {"condition": "MACD_signal_period < MACD_slow_period"}, # (convention) Signal MACD doit être plus court que slow 
+        # 1. Basic constraints: 
+        {"condition": "SMA_long_period >= SMA_short_period + 50"}, # Ensure short period is less than long period and force a TRUE difference between SMAs
+        {"condition": "MACD_fast_period < MACD_slow_period"}, # (convention) This is a convention in technical analysis, fast EMA must be less than slow EMA. MACD (Moving Average Convergence Divergence) compares two exponential moving averages (EMA) of different periods to identify trends and potential reversal points in asset price.
+        {"condition": "MACD_signal_period < MACD_slow_period"}, # (convention) MACD signal must be shorter than slow 
         
-        # Ratio risk/reward minimum (bonne pratique)
-        {"condition": "take_profit >= 1.2 * stop_loss"},  # Si votre parser supporte les expressions
+        # Minimum risk/reward ratio (best practice)
+        {"condition": "take_profit >= 1.2 * stop_loss"},  # If your parser supports expressions
         
-        ## 2. ⚠️ Contraintes métier optionnelles (selon votre stratégie)
+        ## 2. ⚠️ Optional business constraints (depending on your strategy)
         
-        # Relation entre indicateurs (si logique stratégique)
-        {"condition": "RSI_period < BollingerBands_period"},    # RSI plus réactif que BB
-        {"condition": "SMA_short_period < BollingerBands_period"},  # SMA court < BB pour réactivité
+        # Relationship between indicators (if strategic logic)
+        {"condition": "RSI_period < BollingerBands_period"},    # RSI more reactive than BB
+        {"condition": "SMA_short_period < BollingerBands_period"},  # Short SMA < BB for reactivity
     
     ],
     "optimization": {
@@ -145,7 +145,7 @@ OPTIMIZATION_CONFIG = {
 
 STRATEGIES_IMPLEMENTED = {
     'simple_strategy': {
-        'description': 'Stratégie simple basée sur les croisements de SMA et les niveaux de RSI.',
+        'description': 'Simple strategy based on SMA crossovers and RSI levels.',
         'parameters': ['short_window', 'long_window', 'rsi_period', 'stop_loss', 'atr_period', 'take_profit', 'position_size', 'macd_hist_buy_threshold', 'macd_hist_sell_threshold'],
         'required_indicators': ['SMA_short', 'SMA_long', 'RSI', 'MACD', 'ATR'],
         'function': 'simple_strategy_fct'
@@ -154,7 +154,7 @@ STRATEGIES_IMPLEMENTED = {
 
 
 class BacktestStrategyCore:
-    """Contient toutes les stratégies de trading implémentées."""
+    """Contains all implemented trading strategies."""
     
     @staticmethod
     def simple_strategy_fct(
@@ -166,8 +166,8 @@ class BacktestStrategyCore:
             stop_loss: float, 
             take_profit: float,
             position_size: float,
-            macd_hist_buy_threshold: float = -0.5,   # Seuil pour éviter d'acheter pendant chute libre (défaut moins restrictif)
-            macd_hist_sell_threshold: float = 0.5,  # Seuil pour éviter de vendre pendant montée forte (défaut moins restrictif)
+            macd_hist_buy_threshold: float = -0.5,   # Threshold to avoid buying during free fall (less restrictive default)
+            macd_hist_sell_threshold: float = 0.5,  # Threshold to avoid selling during strong rise (less restrictive default)
             return_trades: bool = False
     ) -> dict:
         df = df.clone().drop_nulls()
@@ -175,105 +175,105 @@ class BacktestStrategyCore:
         if len(df) == 0:
             return {"total_return": 0.0, "sharpe_ratio": 0.0, "cagr": 0.0, "max_drawdown": 0.0}
         
-        # Calculer la moyenne de l'ATR pour le filtre de volatilité
+        # Calculate ATR mean for volatility filter
         atr_mean = df[f'ATR{atr_period}'].mean()
     
-        # Générer les signaux
+        # Generate signals
         # 
-        # AMÉLIORATION : Ajout de filtres pour éviter les signaux prématurés pendant les tendances fortes
-        # - Ne pas VENDRE pendant une forte tendance haussière (momentum positif fort)
-        # - Ne pas ACHETER pendant une forte tendance baissière (momentum négatif fort)
-        # Utilisation de MACD pour détecter la force du momentum
+        # IMPROVEMENT: Adding filters to avoid premature signals during strong trends
+        # - Do not SELL during a strong bullish trend (strong positive momentum)
+        # - Do not BUY during a strong bearish trend (strong negative momentum)
+        # Using MACD to detect momentum strength
         
-        # Construire les conditions de base (moins restrictives pour plus de signaux)
-        # Conditions assouplies : thresholds SMA réduits, RSI levels élargis, ATR filter assoupli
+        # Build base conditions (less restrictive for more signals)
+        # Relaxed conditions: reduced SMA thresholds, widened RSI levels, relaxed ATR filter
         buy_base_condition = (
-            (pl.col(f'SMA{short_window}') < pl.col(f'SMA{long_window}') * 0.995) &  # Réduit de 0.98 à 0.995 (moins restrictif)
-            (pl.col(f'RSI{rsi_period}') < 45) &  # Élargi de 40 à 45 (moins restrictif)
-            (pl.col(f'ATR{atr_period}') > atr_mean * 0.6)  # Réduit de 0.8 à 0.6 (moins restrictif)
+            (pl.col(f'SMA{short_window}') < pl.col(f'SMA{long_window}') * 0.995) &  # Reduced from 0.98 to 0.995 (less restrictive)
+            (pl.col(f'RSI{rsi_period}') < 45) &  # Widened from 40 to 45 (less restrictive)
+            (pl.col(f'ATR{atr_period}') > atr_mean * 0.6)  # Reduced from 0.8 to 0.6 (less restrictive)
         )
         
         sell_base_condition = (
-            (pl.col(f'SMA{short_window}') > pl.col(f'SMA{long_window}') * 1.005) &  # Réduit de 1.02 à 1.005 (moins restrictif)
-            (pl.col(f'RSI{rsi_period}') > 55) &  # Réduit de 60 à 55 (moins restrictif)
-            (pl.col(f'ATR{atr_period}') > atr_mean * 0.6)  # Réduit de 0.8 à 0.6 (moins restrictif)
+            (pl.col(f'SMA{short_window}') > pl.col(f'SMA{long_window}') * 1.005) &  # Reduced from 1.02 to 1.005 (less restrictive)
+            (pl.col(f'RSI{rsi_period}') > 55) &  # Reduced from 60 to 55 (less restrictive)
+            (pl.col(f'ATR{atr_period}') > atr_mean * 0.6)  # Reduced from 0.8 to 0.6 (less restrictive)
         )
         
-        # Ajouter le filtre MACD si disponible (évite les signaux pendant tendances fortes)
-        # Les seuils sont maintenant optimisables via macd_hist_buy_threshold et macd_hist_sell_threshold
+        # Add MACD filter if available (avoids signals during strong trends)
+        # Thresholds are now optimizable via macd_hist_buy_threshold and macd_hist_sell_threshold
         if 'MACD_hist' in df.columns:
-            # Ne pas acheter si momentum baissier très fort (chute libre)
-            # MACD_hist doit être supérieur au seuil pour permettre l'achat
+            # Do not buy if bearish momentum is very strong (free fall)
+            # MACD_hist must be greater than threshold to allow buying
             buy_condition = buy_base_condition & (pl.col('MACD_hist') > macd_hist_buy_threshold)
-            # Ne pas vendre si momentum haussier très fort (montée forte)
-            # MACD_hist doit être inférieur au seuil pour permettre la vente
+            # Do not sell if bullish momentum is very strong (strong rise)
+            # MACD_hist must be less than threshold to allow selling
             sell_condition = sell_base_condition & (pl.col('MACD_hist') < macd_hist_sell_threshold)
         else:
-            # Si MACD n'existe pas, utiliser les conditions de base
+            # If MACD doesn't exist, use base conditions
             buy_condition = buy_base_condition
             sell_condition = sell_base_condition
         
         df = df.with_columns([
             pl.when(
-                # LONG (ACHETER) : Acheter quand prix est BAS (creux)
-                # Condition : SMA court < SMA long (tendance baissière) + RSI survendu = bon moment pour ACHETER au creux
-                # FILTRE ANTI-TENDANCE FORTE : Ne pas acheter si momentum baissier est très fort (évite chute libre)
+                # LONG (BUY): Buy when price is LOW (trough)
+                # Condition: Short SMA < Long SMA (bearish trend) + oversold RSI = good time to BUY at the trough
+                # ANTI-STRONG-TREND FILTER: Do not buy if bearish momentum is very strong (avoids free fall)
                 buy_condition
-            ).then(1)  # Signal LONG = on ACHÈTE (BUY) - maintenant au creux ✓
+            ).then(1)  # LONG signal = we BUY - now at the trough ✓
             .when(
-                # SHORT (VENDRE) : Vendre quand prix est HAUT (sommet)
-                # Condition : SMA court > SMA long (tendance haussière) + RSI suracheté = bon moment pour VENDRE au sommet
-                # FILTRE ANTI-TENDANCE FORTE : Ne pas vendre si momentum haussier est très fort (évite montée forte)
+                # SHORT (SELL): Sell when price is HIGH (peak)
+                # Condition: Short SMA > Long SMA (bullish trend) + overbought RSI = good time to SELL at the peak
+                # ANTI-STRONG-TREND FILTER: Do not sell if bullish momentum is very strong (avoids strong rise)
                 sell_condition
-            ).then(-1)  # Signal SHORT = on VEND (SELL) - maintenant au sommet ✓
+            ).then(-1)  # SHORT signal = we SELL - now at the peak ✓
             .otherwise(0)
             .alias('signal')
         ])
         
         
-        # Calculer les rendements
+        # Calculate returns
         df = df.with_columns([
             pl.col('close').pct_change().alias('price_returns'),
             pl.col('signal').shift(1).fill_null(0).alias('signal_shifted')
         ])
         
-        # Appliquer les stops correctement
+        # Apply stops correctly
         df = df.with_columns([
             pl.when(pl.col('signal_shifted') != 0)
             .then(
-                # Calculer le rendement brut
+                # Calculate raw return
                 pl.col('price_returns') * pl.col('signal_shifted') * position_size
             )
             .otherwise(0.0)
             .alias('raw_returns')
         ])
         
-        # Appliquer stop loss et take profit
+        # Apply stop loss and take profit
         df = df.with_columns([
             pl.when(pl.col('raw_returns') < -stop_loss)
-            .then(-stop_loss * position_size)  # Limiter la perte
+            .then(-stop_loss * position_size)  # Limit loss
             .when(pl.col('raw_returns') > take_profit)
-            .then(take_profit * position_size)  # Limiter le gain
+            .then(take_profit * position_size)  # Limit gain
             .otherwise(pl.col('raw_returns'))
             .alias('strategy_returns')
         ])
         
         returns = df['strategy_returns'].drop_nulls()
         
-        # DEBUG: Afficher les statistiques
+        # DEBUG: Display statistics
         num_total_signals = (df['signal'] != 0).sum()
-        print(f"  Signaux générés: {num_total_signals}")
+        print(f"  Signals generated: {num_total_signals}")
         
         if len(returns) == 0 or num_total_signals == 0:
             return {"total_return": 0.0, "sharpe_ratio": 0.0, "cagr": 0.0, "max_drawdown": 0.0}
         
-        # Juste après la création des signaux
+        # Right after signal creation
         num_long_signals = (df['signal'] == 1).sum()
         num_short_signals = (df['signal'] == -1).sum()
         num_actual_trades = (df['signal_shifted'] != 0).sum()
 
-        print(f"  📊 Signaux totaux: {num_total_signals} (Long: {num_long_signals}, Short: {num_short_signals})")
-        print(f"  💼 Trades exécutés: {num_actual_trades}")
+        print(f"  📊 Total signals: {num_total_signals} (Long: {num_long_signals}, Short: {num_short_signals})")
+        print(f"  💼 Executed trades: {num_actual_trades}")
 
         
         total_return = returns.sum()
@@ -282,7 +282,7 @@ class BacktestStrategyCore:
         sharpe_ratio = (mean_ret / std_ret) * np.sqrt(252 * 390) if std_ret and std_ret > 0 else 0.0
         
         # 3. CAGR (Compound Annual Growth Rate)
-        # Calculer la courbe de capital (cumulative returns)
+        # Calculate capital curve (cumulative returns)
         df = df.with_columns([
             (1 + pl.col('strategy_returns')).cum_prod().alias('cumulative_returns')
         ])
@@ -291,32 +291,32 @@ class BacktestStrategyCore:
         final_value = cumulative[-1] if cumulative else 1.0
         initial_value = 1.0
 
-        # CORRECTION : Utiliser les dates réelles
+        # CORRECTION: Use actual dates
         if 'datetime' in df.columns:
             first_date = df['datetime'][0]
             last_date = df['datetime'][-1]
             
-            # Calculer la différence en jours
-            if hasattr(first_date, 'date'):  # Si c'est un datetime
+            # Calculate difference in days
+            if hasattr(first_date, 'date'):  # If it's a datetime
                 days_diff = (last_date - first_date).days
-            else:  # Si c'est déjà un timedelta ou autre
+            else:  # If it's already a timedelta or other
                 days_diff = (last_date - first_date).total_seconds() / 86400
             
             n_years = days_diff / 365.25
             
-            print(f"  📅 Période: {first_date} → {last_date} ({days_diff} jours = {n_years:.2f} ans)")
+            print(f"  📅 Period: {first_date} → {last_date} ({days_diff} days = {n_years:.2f} years)")
         else:
-            # Fallback si pas de colonne datetime
-            print("  ⚠️  Pas de colonne 'datetime', estimation basée sur le nombre de périodes")
+            # Fallback if no datetime column
+            print("  ⚠️  No 'datetime' column, estimation based on number of periods")
             n_periods = len(df)
-            periods_per_year = 252 * 6.5  # Ajustez selon votre intervalle
+            periods_per_year = 252 * 6.5  # Adjust according to your interval
             n_years = n_periods / periods_per_year
 
-        # Protection contre division par zéro ou années trop petites
-        if n_years > 0.01 and final_value > 0:  # Minimum 4 jours
+        # Protection against division by zero or too small years
+        if n_years > 0.01 and final_value > 0:  # Minimum 4 days
             cagr = (final_value / initial_value) ** (1 / n_years) - 1
         else:
-            print(f"  ⚠️  Période trop courte ({n_years:.4f} ans), CAGR non calculable")
+            print(f"  ⚠️  Period too short ({n_years:.4f} years), CAGR not calculable")
             cagr = 0.0
         
         # 4. Max Drawdown
@@ -331,7 +331,7 @@ class BacktestStrategyCore:
             "sharpe_ratio": float(sharpe_ratio),
             "cagr": float(cagr),
             "max_drawdown": float(max_drawdown),
-            "num_signals": int(num_total_signals)  # Pour debug
+            "num_signals": int(num_total_signals)  # For debug
         }
         
         if return_trades:
@@ -344,43 +344,43 @@ class BacktestStrategyCore:
                 pl.col('cumulative_returns').alias('cumulative_capital')
             ])
             
-            # Ajouter le type de trade (buy/sell)
+            # Add trade type (buy/sell)
             # 
-            # ANALYSE DE LA LOGIQUE :
-            # - signal_shifted = signal de la période précédente (shift(1))
+            # LOGIC ANALYSIS:
+            # - signal_shifted = signal from previous period (shift(1))
             # - returns = price_returns * signal_shifted
-            #   → signal=1 : on gagne si prix monte → position LONG → on ACHÈTE (BUY)
-            #   → signal=-1 : on gagne si prix baisse → position SHORT → on VEND (SELL)
+            #   → signal=1 : we profit if price goes up → LONG position → we BUY
+            #   → signal=-1 : we profit if price goes down → SHORT position → we SELL
             # 
-            # PROBLÈME POTENTIEL : La logique de génération des signaux peut être inversée :
-            # - Signal 1 (LONG) : SMA court > SMA long + 2% ET RSI < 40
-            #   → Tendance haussière mais RSI survendu = pullback = bon moment pour ACHETER → BUY ✓
-            # - Signal -1 (SHORT) : SMA court < SMA long - 2% ET RSI > 60  
-            #   → Tendance baissière mais RSI suracheté = rebond = bon moment pour VENDRE → SELL ✓
+            # POTENTIAL ISSUE: Signal generation logic may be inverted:
+            # - Signal 1 (LONG): Short SMA > Long SMA + 2% AND RSI < 40
+            #   → Bullish trend but oversold RSI = pullback = good time to BUY → BUY ✓
+            # - Signal -1 (SHORT): Short SMA < Long SMA - 2% AND RSI > 60  
+            #   → Bearish trend but overbought RSI = bounce = good time to SELL → SELL ✓
             #
-            # Le mapping devrait être :
-            # - signal = 1 → BUY (ACHETER pour position LONG)
-            # - signal = -1 → SELL (VENDRE pour position SHORT)
+            # The mapping should be:
+            # - signal = 1 → BUY (BUY for LONG position)
+            # - signal = -1 → SELL (SELL for SHORT position)
             trades_df = trades_df.with_columns([
                 pl.when(pl.col('signal') == 1)
-                .then(pl.lit('BUY'))    # LONG signal = ACHETER
+                .then(pl.lit('BUY'))    # LONG signal = BUY
                 .when(pl.col('signal') == -1)
-                .then(pl.lit('SELL'))   # SHORT signal = VENDRE
+                .then(pl.lit('SELL'))   # SHORT signal = SELL
                 .otherwise(pl.lit('HOLD'))
                 .alias('action')
             ])
             
-            # Ajouter un numéro de position
+            # Add position number
             trades_df = trades_df.with_columns([
                 pl.arange(0, len(trades_df)).alias('position_number')
             ])
             
-            # Calculer la quantité (en % du capital)
+            # Calculate quantity (in % of capital)
             trades_df = trades_df.with_columns([
                 (pl.col('position_size') * pl.col('cumulative_capital')).alias('quantity_usd')
             ])
             
-            # Réorganiser les colonnes
+            # Reorganize columns
             trades_df = trades_df.select([
                 'timestamp',
                 'position_number',
@@ -399,7 +399,7 @@ class BacktestStrategyCore:
 
 class StrategyClient:
     """
-    Classe pour gérer la configuration d'optimisation des stratégies de trading.
+    Class to manage trading strategy optimization configuration.
     """
 
     def __init__(self):
@@ -407,11 +407,11 @@ class StrategyClient:
 
     def save_config(self, config: Dict[str, Any], output_path: str) -> None:
         """
-        Sauvegarde la configuration d'optimisation dans un fichier JSON.
+        Saves the optimization configuration to a JSON file.
 
         Args:
-            config (Dict[str, Any]): Configuration d'optimisation.
-            output_path (str): Chemin du fichier de sortie.
+            config (Dict[str, Any]): Optimization configuration.
+            output_path (str): Output file path.
         """
         import json
         with open(output_path, 'w', encoding='utf-8') as f:
@@ -419,43 +419,42 @@ class StrategyClient:
 
     def get_seed_optimization_config(self) -> Dict[str, Any]:
         """
-        Retourne la configuration d'optimisation par défaut.
+        Returns the default optimization configuration.
         
         Returns:
-            Configuration par défaut
+            Default configuration
         """
         return OPTIMIZATION_CONFIG
                 
     def get_seed_indicator_config(self) -> Dict[str, Any]:
         """
-        Retourne la configuration des indicateurs par défaut.
+        Returns the default indicator configuration.
 
         Returns:
-            Configuration par défaut
+            Default configuration
         """
         return INDICATOR_CLASSES
     
     def print_strategies(self):
-        """Affiche les stratégies disponibles."""
-        print("Stratégies disponibles :")
+        """Displays available strategies."""
+        print("Available strategies:")
         for name, info in STRATEGIES_IMPLEMENTED.items():
             print(f"\n  {name}:")
             print(f"    Description: {info['description']}")
-            print(f"    Indicateurs requis: {info['required_indicators']}")
+            print(f"    Required indicators: {info['required_indicators']}")
             
     def get_strategy_fct(self, strategy_name: str):
         """
-        Retourne la fonction de stratégie correspondant au nom donné.
+        Returns the strategy function corresponding to the given name.
 
         Args:
-            strategy_name (str): Nom de la stratégie.
+            strategy_name (str): Strategy name.
 
         Returns:
-            Fonction de la stratégie.
+            Strategy function.
         """
         if strategy_name in STRATEGIES_IMPLEMENTED:
             function_name = STRATEGIES_IMPLEMENTED[strategy_name]['function']
             return getattr(self.strategy_core, function_name)
         else:
-            raise ValueError(f"Stratégie '{strategy_name}' non implémentée.")
-        
+            raise ValueError(f"Strategy '{strategy_name}' not implemented.")

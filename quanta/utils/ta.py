@@ -1,19 +1,20 @@
 import polars as pl
 from abc import ABC, abstractmethod
+from quanta.clients.yfinance import YahooFinanceClient
 
 # ========== Base Class ==========
 
 class Indicator(ABC):
-    """Classe de base pour tous les indicateurs techniques."""
+    """Base class for all technical indicators."""
     
     @abstractmethod
     def calculate(self, df: pl.DataFrame) -> pl.DataFrame:
-        """Calcule l'indicateur et l'ajoute au DataFrame."""
+        """Calculates the indicator and adds it to the DataFrame."""
         pass
     
     @abstractmethod
     def get_column_names(self):
-        """Retourne les noms des colonnes créées par l'indicateur."""
+        """Returns the names of columns created by the indicator."""
         pass
 
 
@@ -62,7 +63,7 @@ class WMA(Indicator):
         self.name = f'WMA{period}'
     
     def calculate(self, df: pl.DataFrame) -> pl.DataFrame:
-        # Calcul simplifié de WMA
+        # Simplified WMA calculation
         weights = list(range(1, self.period + 1))
         weight_sum = sum(weights)
         
@@ -81,7 +82,7 @@ class WMA(Indicator):
 # ========== Bollinger Bands ==========
 
 class BollingerBands(Indicator):
-    """Bandes de Bollinger."""
+    """Bollinger Bands."""
     
     def __init__(self, period: int = 20, std_dev: float = 2.0, column: str = 'close'):
         self.period = period
@@ -110,7 +111,7 @@ class RSI(Indicator):
     def __init__(self, period: int = 14, column: str = 'close'):
         self.period = period
         self.column = column
-        self.name = f'RSI{period}'  # ✅ RSI, pas WMA
+        self.name = f'RSI{period}'  # ✅ RSI, not WMA
    
     def calculate(self, df: pl.DataFrame) -> pl.DataFrame:
         delta = df.select(pl.col(self.column).diff().alias('delta'))['delta']
@@ -158,7 +159,7 @@ class MACD(Indicator):
 
 
 class Stochastic(Indicator):
-    """Oscillateur Stochastique."""
+    """Stochastic Oscillator."""
     
     def __init__(self, period: int = 14, smooth_k: int = 3, smooth_d: int = 3):
         self.period = period
@@ -263,21 +264,21 @@ class VWAP(Indicator):
 # ========== TAClient ==========
 
 class TAClient:
-    """Client pour gérer et calculer des indicateurs techniques."""
+    """Client to manage and calculate technical indicators."""
     
     def __init__(self):
         pass
     
     def calculate_indicators(self, df: pl.DataFrame, indicators: list) -> pl.DataFrame:
         """
-        Calcule tous les indicateurs sur le DataFrame.
+        Calculate all indicators on the DataFrame.
         
         Args:
-            df: DataFrame Polars
-            indicators: Liste d'objets Indicator
+            df: Polars DataFrame
+            indicators: List of Indicator objects
             
         Returns:
-            DataFrame avec tous les indicateurs calculés
+            DataFrame with all calculated indicators
         """
         for indicator in indicators:
             if isinstance(indicator, Indicator):
@@ -294,15 +295,14 @@ INDICATOR_CLASSES = {
 }
 
 
-# Exemple d'utilisation
+# Usage example
 if __name__ == "__main__":
-    from yahoo_finance_client import YahooFinanceClient
     
-    # Récupérer les données
+    # Get data
     yahoo_client = YahooFinanceClient()
     df = yahoo_client.get_price("AAPL", from_date="2023-01-01", to_date="2024-12-31")
     
-    # Définir les indicateurs (uniquement les calculs techniques)
+    # Define indicators (technical calculations only)
     indicators = [
         SMA(50),
         SMA(200),
@@ -314,7 +314,7 @@ if __name__ == "__main__":
         OBV()
     ]
     
-    # Calculer les indicateurs
+    # Calculate indicators
     ta_client = TAClient()
     df = ta_client.calculate_indicators(df, indicators)
     

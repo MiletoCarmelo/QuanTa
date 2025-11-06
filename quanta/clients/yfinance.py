@@ -5,7 +5,7 @@ from datetime import datetime
 
 
 class YahooFinanceClient:
-    """Client basique pour interagir avec Yahoo Finance."""
+    """Basic client to interact with Yahoo Finance."""
     
     BASE_URL = "https://query1.finance.yahoo.com/v8/finance"
     
@@ -18,27 +18,27 @@ class YahooFinanceClient:
     def get_quote(self, symbol: str, from_date: Optional[str] = None, 
                   to_date: Optional[str] = None, interval: str = '1d') -> Optional[Dict[str, Any]]:
         """
-        Récupère les informations de cotation pour un symbole donné.
+        Retrieves quote information for a given symbol.
         
         Args:
-            symbol: Le symbole boursier (ex: 'AAPL', 'MSFT')
-            from_date: Date de début (timestamp Unix ou format 'YYYY-MM-DD'). Si None, retourne la dernière cotation
-            to_date: Date de fin (timestamp Unix ou format 'YYYY-MM-DD'). Si None, utilise aujourd'hui
-            interval: Intervalle des données ('1m', '5m', '15m', '30m', '1h', '1d', '1wk', '1mo')
+            symbol: Stock symbol (e.g., 'AAPL', 'MSFT')
+            from_date: Start date (Unix timestamp or 'YYYY-MM-DD' format). If None, returns latest quote
+            to_date: End date (Unix timestamp or 'YYYY-MM-DD' format). If None, uses today
+            interval: Data interval ('1m', '5m', '15m', '30m', '1h', '1d', '1wk', '1mo')
             
         Returns:
-            Dictionnaire contenant les données de cotation ou None en cas d'erreur
+            Dictionary containing quote data or None on error
         """
         url = f"{self.BASE_URL}/chart/{symbol}"
         params = {'interval': interval}
         
-        # Si aucune date n'est fournie, utiliser range pour la dernière cotation
+        # If no date is provided, use range for latest quote
         if from_date is None and to_date is None:
             params['range'] = '1d'
         else:
-            # Gérer les dates
+            # Handle dates
             if from_date:
-                # Convertir la date si nécessaire
+                # Convert date if necessary
                 if isinstance(from_date, str) and '-' in from_date:
                     from datetime import datetime
                     from_timestamp = int(datetime.strptime(from_date, '%Y-%m-%d').timestamp())
@@ -64,18 +64,18 @@ class YahooFinanceClient:
             return None
             
         except requests.exceptions.RequestException as e:
-            print(f"Erreur lors de la requête: {e}")
+            print(f"Request error: {e}")
             return None
     
     def get_market_info(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
-        Récupère les informations générales sur le marché (timezone, heures d'ouverture officielles).
+        Retrieves general market information (timezone, official opening hours).
         
         Args:
-            symbol: Le symbole boursier
+            symbol: Stock symbol
             
         Returns:
-            Dictionnaire contenant les informations sur le marché
+            Dictionary containing market information
         """
         url = f"{self.BASE_URL}/chart/{symbol}"
         params = {'range': '1d', 'interval': '1d'}
@@ -98,7 +98,7 @@ class YahooFinanceClient:
                     'currency': meta.get('currency'),
                     'regularMarketTime': meta.get('regularMarketTime'),
                     'regularMarketPrice': meta.get('regularMarketPrice'),
-                    # Heures d'ouverture/fermeture officielles
+                    # Official opening/closing hours
                     'regular': current_period.get('regular', {}),
                     'pre': current_period.get('pre', {}),
                     'post': current_period.get('post', {})
@@ -106,46 +106,46 @@ class YahooFinanceClient:
             return None
             
         except requests.exceptions.RequestException as e:
-            print(f"Erreur lors de la requête: {e}")
+            print(f"Request error: {e}")
             return None
     
     def get_trading_hours(self, symbol: str, from_date: str, to_date: Optional[str] = None, 
                          interval: str = '1h') -> Optional[pl.DataFrame]:
         """
-        Récupère les heures de trading et identifie les périodes de nuit (marché fermé).
+        Retrieves trading hours and identifies night periods (market closed).
         
         Args:
-            symbol: Le symbole boursier
-            from_date: Date de début (format 'YYYY-MM-DD')
-            to_date: Date de fin (format 'YYYY-MM-DD'), si None utilise aujourd'hui
-            interval: Intervalle ('1h', '30m', '15m', '5m', '1m')
+            symbol: Stock symbol
+            from_date: Start date ('YYYY-MM-DD' format)
+            to_date: End date ('YYYY-MM-DD' format), if None uses today
+            interval: Interval ('1h', '30m', '15m', '5m', '1m')
             
         Returns:
-            DataFrame avec datetime, is_market_hours, is_night
+            DataFrame with datetime, is_market_hours, is_night
         """
-        # Récupérer les données intraday
+        # Get intraday data
         df = self.get_price(symbol, from_date=from_date, to_date=to_date, 
                            interval=interval, postclean=False)
         
         if df is None:
             return None
         
-        # Extraire l'heure de chaque timestamp
+        # Extract hour from each timestamp
         df = df.with_columns([
             pl.col('datetime').dt.hour().alias('hour'),
-            pl.col('datetime').dt.weekday().alias('weekday'),  # 0=lundi, 6=dimanche
+            pl.col('datetime').dt.weekday().alias('weekday'),  # 0=Monday, 6=Sunday
         ])
         
-        # Identifier les heures de marché (approximation pour US markets: 9h30-16h EST)
-        # Note: Pour être plus précis, il faudrait prendre en compte le timezone
+        # Identify market hours (approximation for US markets: 9:30am-4pm EST)
+        # Note: For more precision, timezone should be taken into account
         df = df.with_columns([
-            # Marché ouvert si: jour de semaine (0-4) ET pendant les heures de trading
+            # Market open if: weekday (0-4) AND during trading hours
             ((pl.col('weekday') < 5) & 
              (pl.col('volume') > 0) &
              (pl.col('open').is_not_null())
             ).alias('is_market_hours'),
             
-            # Nuit = pas pendant les heures de marché
+            # Night = not during market hours
             ~((pl.col('weekday') < 5) & 
               (pl.col('volume') > 0) &
               (pl.col('open').is_not_null())
@@ -156,25 +156,25 @@ class YahooFinanceClient:
     
     def get_trading_days(self, symbol: str, from_date: str, to_date: Optional[str] = None) -> Optional[pl.DataFrame]:
         """
-        Récupère les jours de trading effectifs sur une période.
+        Retrieves actual trading days over a period.
         
         Args:
-            symbol: Le symbole boursier
-            from_date: Date de début (format 'YYYY-MM-DD')
-            to_date: Date de fin (format 'YYYY-MM-DD'), si None utilise aujourd'hui
+            symbol: Stock symbol
+            from_date: Start date ('YYYY-MM-DD' format)
+            to_date: End date ('YYYY-MM-DD' format), if None uses today
             
         Returns:
-            DataFrame avec les dates de trading (datetime) et si le marché était ouvert
+            DataFrame with trading dates (datetime) and whether market was open
         """
-        # Récupérer les données sur la période avec un interval journalier
+        # Get data for the period with daily interval
         df = self.get_price(symbol, from_date=from_date, to_date=to_date, interval='1d', postclean=False)
         
         if df is None:
             return None
         
-        # Identifier les jours de trading (où il y a eu de l'activité)
+        # Identify trading days (where there was activity)
         df = df.with_columns([
-            # Un jour de trading a des valeurs non-nulles et du volume > 0
+            # A trading day has non-null values and volume > 0
             ((pl.col('open').is_not_null()) & 
              (pl.col('volume') > 0) &
              ~((pl.col('high') == pl.col('low')) & 
@@ -188,21 +188,21 @@ class YahooFinanceClient:
     
     def _remove_closed_periods(self, df: pl.DataFrame, symbol: str) -> pl.DataFrame:
         """
-        Retire les périodes où le marché est fermé (weekends, jours fériés).
+        Removes periods when market is closed (weekends, holidays).
         
-        Cette méthode filtre automatiquement les lignes sans activité de marché.
+        This method automatically filters rows with no market activity.
         
         Args:
-            df: DataFrame avec les données de prix
-            symbol: Le symbole boursier (non utilisé actuellement, pour extension future)
+            df: DataFrame with price data
+            symbol: Stock symbol (not currently used, for future extension)
             
         Returns:
-            DataFrame nettoyé sans les périodes fermées
+            Cleaned DataFrame without closed periods
         """
-        # Méthode simple : retirer les lignes où toutes les valeurs OHLC sont nulles ou identiques
-        # Cela indique généralement une période de marché fermé
+        # Simple method: remove rows where all OHLC values are null or identical
+        # This usually indicates a closed market period
         
-        # Filtrer les lignes où au moins une valeur OHLC est non-nulle
+        # Filter rows where at least one OHLC value is non-null
         df_clean = df.filter(
             (pl.col('open').is_not_null()) &
             (pl.col('high').is_not_null()) &
@@ -210,8 +210,8 @@ class YahooFinanceClient:
             (pl.col('close').is_not_null())
         )
         
-        # Filtrer les lignes où il y a eu une variation de prix (pas de marché fermé)
-        # Si high == low == open == close et volume == 0, c'est probablement fermé
+        # Filter rows where there was price variation (not closed market)
+        # If high == low == open == close and volume == 0, it's probably closed
         df_clean = df_clean.filter(
             ~((pl.col('high') == pl.col('low')) & 
               (pl.col('high') == pl.col('open')) & 
@@ -226,32 +226,32 @@ class YahooFinanceClient:
                   to_date: Optional[str] = None, interval: str = '1d',
                   postclean: bool = False) -> Optional[Union[float, pl.DataFrame]]:
         """
-        Récupère le prix d'un symbole.
+        Retrieves the price of a symbol.
         
         Args:
-            symbol: Le symbole boursier
-            from_date: Date de début (timestamp Unix ou format 'YYYY-MM-DD'). Si None, retourne le dernier prix
-            to_date: Date de fin (timestamp Unix ou format 'YYYY-MM-DD'). Si None, utilise aujourd'hui
-            interval: Intervalle des données ('1m', '5m', '15m', '30m', '1h', '1d', '1wk', '1mo')
-            postclean: Si True, retire les périodes où le marché est fermé
+            symbol: Stock symbol
+            from_date: Start date (Unix timestamp or 'YYYY-MM-DD' format). If None, returns latest price
+            to_date: End date (Unix timestamp or 'YYYY-MM-DD' format). If None, uses today
+            interval: Data interval ('1m', '5m', '15m', '30m', '1h', '1d', '1wk', '1mo')
+            postclean: If True, removes periods when market is closed
             
         Returns:
-            Le prix actuel (float) si pas de dates, ou DataFrame Polars avec historique si dates fournies
+            Current price (float) if no dates, or Polars DataFrame with history if dates provided
         """
-        # Si aucune date n'est fournie, retourner le dernier prix
+        # If no date is provided, return latest price
         if from_date is None and to_date is None:
             quote = self.get_quote(symbol)
             if quote and 'meta' in quote:
                 return quote['meta'].get('regularMarketPrice')
             return None
         
-        # Sinon, récupérer l'historique des prix
+        # Otherwise, retrieve price history
         url = f"{self.BASE_URL}/chart/{symbol}"
         params = {'interval': interval}
         
-        # Gérer les dates
+        # Handle dates
         if from_date:
-            # Convertir la date si nécessaire
+            # Convert date if necessary
             if isinstance(from_date, str) and '-' in from_date:
                 from_timestamp = int(datetime.strptime(from_date, '%Y-%m-%d').timestamp())
                 params['period1'] = from_timestamp
@@ -276,7 +276,7 @@ class YahooFinanceClient:
                 indicators = result.get('indicators', {})
                 quote_data = indicators.get('quote', [{}])[0]
                 
-                # Créer un DataFrame Polars
+                # Create a Polars DataFrame
                 df = pl.DataFrame({
                     'timestamp': timestamps,
                     'datetime': [datetime.fromtimestamp(ts) for ts in timestamps],
@@ -287,7 +287,7 @@ class YahooFinanceClient:
                     'volume': quote_data.get('volume', [])
                 })
                 
-                # Nettoyer les périodes fermées si demandé
+                # Clean closed periods if requested
                 if postclean:
                     df = self._remove_closed_periods(df, symbol)
                 
@@ -295,69 +295,69 @@ class YahooFinanceClient:
             return None
             
         except requests.exceptions.RequestException as e:
-            print(f"Erreur lors de la requête: {e}")
+            print(f"Request error: {e}")
             return None
 
-# Exemple d'utilisation
+# Usage example
 if __name__ == "__main__":
     client = YahooFinanceClient()
     
-    # Récupérer le dernier prix d'Apple
+    # Get latest Apple price
     price = client.get_price("AAPL")
     if price:
-        print(f"Dernier prix d'Apple: ${price}")
+        print(f"Latest Apple price: ${price}")
     
-    # Récupérer les heures de trading et identifier les nuits
+    # Get trading hours and identify nights
     three_days_ago = (today - timedelta(days=3)).strftime('%Y-%m-%d')
     
     trading_hours = client.get_trading_hours("AAPL", from_date=three_days_ago, interval='1h')
     if trading_hours is not None:
-        print(f"\n=== Heures de trading vs nuits (derniers 3 jours) ===")
+        print(f"\n=== Trading hours vs nights (last 3 days) ===")
         print(trading_hours)
         
         market_hours = trading_hours.filter(pl.col('is_market_hours'))
         night_hours = trading_hours.filter(pl.col('is_night'))
         
-        print(f"\nHeures de marché ouvert: {len(market_hours)}")
-        print(f"Heures de nuit/fermé: {len(night_hours)}")
+        print(f"\nMarket open hours: {len(market_hours)}")
+        print(f"Night/closed hours: {len(night_hours)}")
         
-        # Afficher quelques exemples de nuits
-        print(f"\nExemples de périodes de nuit:")
+        # Display some night examples
+        print(f"\nNight period examples:")
         print(night_hours.head(10))
     
-    # Récupérer les jours de trading sur les 10 derniers jours
+    # Get trading days over the last 10 days
     from datetime import datetime, timedelta
     today = datetime.now()
     ten_days_ago = (today - timedelta(days=10)).strftime('%Y-%m-%d')
     
     trading_days = client.get_trading_days("AAPL", from_date=ten_days_ago)
     if trading_days is not None:
-        print(f"\n=== Jours de trading sur les 10 derniers jours ===")
+        print(f"\n=== Trading days over the last 10 days ===")
         print(trading_days)
         
         trading_count = trading_days.filter(pl.col('is_trading_day'))
-        print(f"\nNombre de jours de trading: {len(trading_count)}")
+        print(f"\nNumber of trading days: {len(trading_count)}")
     
-    # Récupérer les périodes de trading
+    # Get trading periods
     trading_periods = client.get_trading_periods("AAPL")
     if trading_periods:
-        print(f"\nFuseau horaire: {trading_periods['timezone']}")
+        print(f"\nTimezone: {trading_periods['timezone']}")
         print(f"Exchange: {trading_periods['exchangeTimezoneName']}")
     
-    # Récupérer l'historique avec nettoyage des périodes fermées
+    # Get history with cleaning of closed periods
     df = client.get_price("AAPL", from_date="2024-01-01", to_date="2024-01-31", 
                          interval="1d", postclean=True)
     if df is not None:
         print(f"\n{df}")
-        print(f"\nNombre de jours de trading: {len(df)}")
+        print(f"\nNumber of trading days: {len(df)}")
     
-    # Comparer avec/sans nettoyage
+    # Compare with/without cleaning
     df_raw = client.get_price("AAPL", from_date="2024-01-01", to_date="2024-01-31", 
                               interval="1d", postclean=False)
     df_clean = client.get_price("AAPL", from_date="2024-01-01", to_date="2024-01-31", 
                                 interval="1d", postclean=True)
     
     if df_raw is not None and df_clean is not None:
-        print(f"\nAvant nettoyage: {len(df_raw)} lignes")
-        print(f"Après nettoyage: {len(df_clean)} lignes")
-        print(f"Lignes retirées: {len(df_raw) - len(df_clean)}")
+        print(f"\nBefore cleaning: {len(df_raw)} rows")
+        print(f"After cleaning: {len(df_clean)} rows")
+        print(f"Rows removed: {len(df_raw) - len(df_clean)}")

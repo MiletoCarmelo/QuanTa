@@ -7,7 +7,7 @@ from quanta.utils.trace import Trace, Candlesticks, Volume, Line
 
 
 class ChartClient:
-    """Client pour créer des graphiques financiers avec indicateurs techniques."""
+    """Client for creating financial charts with technical indicators."""
     
     def __init__(self):
         self.ta_client = TAClient()
@@ -22,38 +22,38 @@ class ChartClient:
              ):
 
         """
-        Affiche un graphique avec chandeliers et indicateurs techniques.
+        Display a chart with candlesticks and technical indicators.
         
         Args:
-            df: DataFrame Polars avec colonnes 'datetime', 'open', 'high', 'low', 'close', 'volume'
-            symbol: Nom du symbole pour le titre
-            traces: Liste de traces [Candlesticks(), Volume(), Line('my_col')]
-            indicators: Liste d'indicateurs techniques [SMA(50), RSI(), MACD()]
-            trades_df: DataFrame avec les trades (timestamp, action, price)
-            max_bars: Nombre maximum de barres à afficher (optionnel)
+            df: Polars DataFrame with columns 'datetime', 'open', 'high', 'low', 'close', 'volume'
+            symbol: Symbol name for the title
+            traces: List of traces [Candlesticks(), Volume(), Line('my_col')]
+            indicators: List of technical indicators [SMA(50), RSI(), MACD()]
+            trades_df: DataFrame with trades (timestamp, action, price)
+            max_bars: Maximum number of bars to display (optional)
         """
         if df is None or len(df) == 0:
-            print("Aucune donnée disponible")
+            print("No data available")
             return
         
-        # Vérifier les colonnes requises
+        # Check required columns
         required_cols = ['datetime', 'open', 'high', 'low', 'close', 'volume']
         if not all(col in df.columns for col in required_cols):
-            print(f"Le DataFrame doit contenir les colonnes: {required_cols}")
+            print(f"DataFrame must contain columns: {required_cols}")
             return
                 
-        # Limiter le nombre de barres si demandé
+        # Limit number of bars if requested
         if max_bars and len(df) > max_bars:
             df = df.tail(max_bars)
             
-        # Configuration spécifique selon le type d'axe X
+        # Specific configuration based on X-axis type
         if x_axis_type == 'row_nb':
             df = df.with_columns(pl.int_range(0, pl.len()).alias('x_index'))
             x_column = 'x_index'
-        else:  # datetime (défaut)
+        else:  # datetime (default)
             x_column = 'datetime'
             
-        # configurer trades_df si fourni et x_axis_type est 'row_nb'
+        # Configure trades_df if provided and x_axis_type is 'row_nb'
         if x_axis_type == 'row_nb' and trades_df is not None:
             trades_df = trades_df.join(
                 df.select(['datetime', 'x_index']),
@@ -68,7 +68,7 @@ class ChartClient:
             print(f"With {len(trades_df)} trades")
         #     print(trades_df)
         
-        # Par défaut
+        # Default
         if traces is None and indicators is None:
             traces = [Candlesticks(), Volume()]
             indicators = [SMA(50), SMA(200), RSI()]
@@ -77,21 +77,21 @@ class ChartClient:
         elif indicators is None:
             indicators = []
         
-        # Calculer tous les indicateurs
+        # Calculate all indicators
         df = self.ta_client.calculate_indicators(df, indicators)
         
-        # Analyser les traces et indicateurs
+        # Analyze traces and indicators
         has_candlesticks = any(isinstance(p, Candlesticks) for p in traces)
         volume_trace = next((p for p in traces if isinstance(p, Volume)), None)
         overlay_lines = [p for p in traces if isinstance(p, Line)]
         
-        # Indicateurs overlay (SMA, EMA, BB)
+        # Overlay indicators (SMA, EMA, BB)
         overlay_indicators = [ind for ind in indicators if isinstance(ind, (SMA, EMA, BollingerBands))]
         
-        # Indicateurs subplot (RSI, MACD, etc.)
+        # Subplot indicators (RSI, MACD, etc.)
         subplot_indicators = [ind for ind in indicators if isinstance(ind, (RSI, MACD, Stochastic, ATR))]
         
-        # Créer les subplots
+        # Create subplots
         rows = 1
         row_heights = [0.6]
         
@@ -110,9 +110,9 @@ class ChartClient:
             row_heights=row_heights
         )
         
-        # === ROW 1: Prix principal ===
+        # === ROW 1: Main price ===
         
-        # Chandeliers
+        # Candlesticks
         if has_candlesticks:
             
             fig.add_trace(go.Candlestick(
@@ -125,7 +125,7 @@ class ChartClient:
             ), row=1, col=1)
                   
         
-        # Lignes custom (traces)
+        # Custom lines (traces)
         for line in overlay_lines:
             if line.column in df.columns:                    
                 fig.add_trace(go.Scatter(
@@ -135,7 +135,7 @@ class ChartClient:
                     line=dict(color=line.color, width=line.width) if line.color else dict(width=line.width),
                 ), row=1, col=1)
         
-        # Indicateurs overlay (SMA, EMA, BB)
+        # Overlay indicators (SMA, EMA, BB)
         for ind in overlay_indicators:
             if isinstance(ind, SMA):
                 if ind.name in df.columns:
@@ -173,10 +173,10 @@ class ChartClient:
         
         # === Trades ===
         if trades_df is not None and len(trades_df) > 0:
-            # Préparer les données pour l'axe X
+            # Prepare data for X-axis
             x_col = 'x_value'
             if x_axis_type == 'row_nb' and 'x_index' in trades_df.columns:
-                # Renommer x_index en x_value
+                # Rename x_index to x_value
                 trades_df = trades_df.rename({'x_index': 'x_value'})
                 x_col = 'x_value'
             else:
@@ -184,11 +184,11 @@ class ChartClient:
                     pl.col('timestamp').alias('x_value')
                 ])
                 
-            print(f"Debug: {len(trades_df)} trades après traitement")
+            print(f"Debug: {len(trades_df)} trades after processing")
             if len(trades_df) > 0:
                 print(trades_df.select(['timestamp', 'x_value', 'action', 'price']).head())
         
-            # ACHATS (triangle up vert)
+            # BUYS (green triangle up)
             buy_trades = trades_df.filter(pl.col('action') == 'BUY')
             if len(buy_trades) > 0:
                 fig.add_trace(go.Scatter(
@@ -202,11 +202,11 @@ class ChartClient:
                         line=dict(color='darkgreen', width=2),
                         opacity=0.8
                     ),
-                    name='Achat',
-                    hovertemplate='<b>Achat</b><br>Prix: %{y:.2f}<br><extra></extra>'
+                    name='Buy',
+                    hovertemplate='<b>Buy</b><br>Price: %{y:.2f}<br><extra></extra>'
                 ), row=1, col=1)
             
-            # VENTES (triangle down rouge)
+            # SELLS (red triangle down)
             sell_trades = trades_df.filter(pl.col('action') == 'SELL')
             if len(sell_trades) > 0:
                 fig.add_trace(go.Scatter(
@@ -220,8 +220,8 @@ class ChartClient:
                         line=dict(color='darkred', width=2),
                         opacity=0.8
                     ),
-                    name='Vente',
-                    hovertemplate='<b>Vente</b><br>Prix: %{y:.2f}<br><extra></extra>'
+                    name='Sell',
+                    hovertemplate='<b>Sell</b><br>Price: %{y:.2f}<br><extra></extra>'
                 ), row=1, col=1)
         
         # === Volume ===
@@ -237,20 +237,20 @@ class ChartClient:
             fig.update_yaxes(title_text="Volume", row=current_row, col=1)
             current_row += 1
         
-        # === Indicateurs subplots ===
+        # === Subplot indicators ===
         for ind in subplot_indicators:
             if isinstance(ind, RSI):
-                if ind.name in df.columns:  # ✅ BON (utilise le nom dynamique RSI14, RSI21, etc.)
+                if ind.name in df.columns:  # ✅ GOOD (uses dynamic name RSI14, RSI21, etc.)
                     fig.add_trace(go.Scatter(
                         x=df[x_column], y=df[ind.name],
-                        name=ind.name, line=dict(color='purple', width=1.5),  # ← Utiliser ind.name
+                        name=ind.name, line=dict(color='purple', width=1.5),  # ← Use ind.name
                     ), row=current_row, col=1)
                     
                     fig.add_hline(y=70, line_dash="dash", line_color="red", 
                                 opacity=0.5, row=current_row, col=1)
                     fig.add_hline(y=30, line_dash="dash", line_color="green", 
                                 opacity=0.5, row=current_row, col=1)
-                    fig.update_yaxes(title_text=ind.name, row=current_row, col=1)  # ← Utiliser ind.name
+                    fig.update_yaxes(title_text=ind.name, row=current_row, col=1)  # ← Use ind.name
                     current_row += 1
             
             elif isinstance(ind, MACD):
@@ -296,17 +296,17 @@ class ChartClient:
                     current_row += 1
             
             elif isinstance(ind, ATR):
-                if ind.name in df.columns:  # ✅ BON
+                if ind.name in df.columns:  # ✅ GOOD
                     fig.add_trace(go.Scatter(
                         x=df[x_column], y=df[ind.name],
-                        name=ind.name, line=dict(color='orange', width=1.5),  # ← Utiliser ind.name
+                        name=ind.name, line=dict(color='orange', width=1.5),  # ← Use ind.name
                     ), row=current_row, col=1)
-                    fig.update_yaxes(title_text=ind.name, row=current_row, col=1)  # ← Utiliser ind.name
+                    fig.update_yaxes(title_text=ind.name, row=current_row, col=1)  # ← Use ind.name
                     current_row += 1
         
-        # Mise en forme professionnelle
+        # Professional formatting
         if theme == 'professional':
-            # Style scientifique inspiré de ROOT/matplotlib
+            # Scientific style inspired by ROOT/matplotlib
             template = 'plotly_white'
             grid_color = 'rgba(200, 200, 200, 0.3)'
             bg_color = 'white'
@@ -359,23 +359,23 @@ class ChartClient:
             margin=dict(l=60, r=40, t=80, b=50)
         )
         
-        # Configuration de l'axe X selon le type
+        # X-axis configuration based on type
         if x_axis_type == 'row_nb':
-            # Échantillonner les dates pour les labels
+            # Sample dates for labels
             step = max(1, len(df) // 15)  # ~15 labels maximum
             tick_indices = list(range(0, len(df), step))
             if tick_indices[-1] != len(df) - 1:
                 tick_indices.append(len(df) - 1)
             
-            # Convertir en listes Python pour l'accès par index
+            # Convert to Python lists for index access
             x_index_list = df['x_index'].to_list()
             datetime_list = df['datetime'].to_list()
             
-            # IMPORTANT : tick_indices contient les INDICES, pas les valeurs !
+            # IMPORTANT: tick_indices contains INDICES, not values!
             tickvals = [x_index_list[i] for i in tick_indices]
             ticktext = [datetime_list[i].strftime('%Y-%m-%d') for i in tick_indices]
             
-            # Appliquer à tous les subplots
+            # Apply to all subplots
             for i in range(1, rows + 1):
                 fig.update_xaxes(
                     tickmode='array',
@@ -385,10 +385,10 @@ class ChartClient:
                     row=i, col=1
                 )
 
-        # S'assurer que le rangeslider est bien désactivé
+        # Ensure rangeslider is disabled
         fig.update_xaxes(rangeslider_visible=False, row=1, col=1)
         
-        # Grille professionnelle pour tous les axes
+        # Professional grid for all axes
         for i in range(1, rows + 1):
             xaxis_update = {
                 'showgrid': True,
@@ -424,20 +424,20 @@ class ChartClient:
         fig.show()
 
 
-# Exemple d'utilisation
+# Usage example
 if __name__ == "__main__":
     from yahoo_finance_client import YahooFinanceClient
     from ta_client import SMA, RSI, MACD, BollingerBands
     from traces import Candlesticks, Volume, Line
     
-    # Récupérer les données
+    # Get data
     yahoo_client = YahooFinanceClient()
     df = yahoo_client.get_price("AAPL", from_date="2023-01-01", to_date="2024-12-31")
     
-    # Créer le graphique
+    # Create chart
     chart_client = ChartClient()
     
-    # Style clean avec séparation traces/indicators
+    # Clean style with separation of traces/indicators
     traces = [
         Candlesticks(),
         Volume()
@@ -454,14 +454,14 @@ if __name__ == "__main__":
                      indicators=indicators, 
                      max_bars=250)
     
-    # Avec indicateur custom
+    # With custom indicator
     from ta_client import TAClient
     ta = TAClient()
     df = df.with_columns((df['high'] + df['low']).alias('my_custom'))
     
     traces = [
         Candlesticks(),
-        Line('my_custom', name='Mon Indicateur', color='purple'),
+        Line('my_custom', name='My Indicator', color='purple'),
         Volume()
     ]
     

@@ -1,0 +1,27 @@
+{
+    "indicators": {
+        "SMA_short": {
+            "period": 22
+        },
+        "SMA_long": {
+            "period": 192
+        },
+        "RSI": {
+            "period": 17
+        },
+        "BollingerBands": {
+            "period": 22,
+            "std_dev": 1.7340279606636548
+        },
+        "MACD": {
+            "fast_period": 9,
+            "slow_period": 20,
+            "signal_period": 12
+        }
+    },
+    "strategy": {
+        "stop_loss": 0.010502105436744277,
+        "take_profit": 0.01595857358814127,
+        "position_size": 0.1185260448662222
+    }
+}
