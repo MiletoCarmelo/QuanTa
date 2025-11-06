@@ -41,12 +41,6 @@ Spawn a shell with the environment activated:
 poetry shell
 ```
 
-Or run commands in one shot:
-
-```bash
-poetry run python -m quanta.demo   # replace with any module/command
-```
-
 ---
 
 ## Usage Examples
@@ -138,7 +132,7 @@ Feel free to open issues or discussions for feature requests!
 
 ## Contact
 
-- **Author**: Mileto (`cmileto@mercuria.com`)  
+- **Author**: Mileto 
 - **LinkedIn**: Share your feedback or showcase what you build with QuanTa – tag the project to spread the word!
 
 If you use QuanTa in your trading research or dashboards, I’d love to hear about it. Happy analysing!
