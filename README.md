@@ -17,6 +17,7 @@ QuanTa centralises everything needed to explore technical indicators, chart mark
 - **Interactive charting** via Plotly with configurable overlays, subplots, and trade annotations.
 - **Strategy optimisation** baked in through Optuna, including constraint management and importance analysis.
 - **Ready-to-run notebooks** showcasing optimisation workflows and strategy exploration.
+- **Ergonomic CLI** to fetch/memoize Yahoo Finance data (keyed by `symbol-interval`), inspect caches, and plot charts with optional indicators.
 
 ---
 
@@ -44,6 +45,42 @@ poetry shell
 ---
 
 ## Usage Examples
+
+### CLI quick start
+
+The CLI (shipped as `python -m quanta.cli`) wraps the main flows:
+
+1. **Fetch & cache data**
+
+   ```bash
+   poetry run python -m quanta.cli fetch AAPL \
+       --from 2023-01-01 \
+       --to   2023-12-31 \
+       --interval 1h
+   ```
+
+   - Cached datasets are stored under the key `SYMBOL-interval` by default (`AAPL-1h` above).  
+   - Re-running `fetch` for the same key *merges* new rows with the existing cache instead of overwriting it.
+
+2. **Inspect caches**
+
+   ```bash
+   poetry run python -m quanta.cli cache --ticker
+   ```
+
+   Displays a Rich table with interval, row count, unique trading days, and last update for each cache key.
+
+3. **Plot**
+
+   ```bash
+   poetry run python -m quanta.cli plot \
+       --cache-key AAPL-1h \
+       --symbol-name "AAPL (1h)" \
+       --indicator SMA:period=50 --indicator RSI
+   ```
+
+   - `--symbol-name / -n` labels the Plotly figure.  
+   - Indicators are optional; none are drawn unless you pass `--indicator`.
 
 ### Fetch and Plot Market Data
 
