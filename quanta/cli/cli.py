@@ -33,9 +33,16 @@ def _cast_value(raw: str) -> Any:
 
 def _parse_params(pairs: List[str]) -> Dict[str, Any]:
     params: Dict[str, Any] = {}
+    implicit_used = False
     for pair in pairs:
         if "=" not in pair:
-            raise typer.BadParameter(f"Parameter '{pair}' must use the format key=value.")
+            if implicit_used:
+                raise typer.BadParameter(
+                    f"Parameter '{pair}' must use key=value (implicit 'period' already set)."
+                )
+            params["period"] = _cast_value(pair)
+            implicit_used = True
+            continue
         key, value = pair.split("=", 1)
         params[key] = _cast_value(value)
     return params

@@ -70,7 +70,15 @@ The CLI (shipped as `python -m quanta.cli`) wraps the main flows:
 
    Displays a Rich table with interval, row count, unique trading days, and last update for each cache key.
 
-3. **Plot**
+3. **List applied indicators**
+
+   ```bash
+   poetry run python -m quanta.cli cache --indicators
+   ```
+
+   Useful to see which TA enrichments have been stored for each dataset.
+
+4. **Plot**
 
    ```bash
    poetry run python -m quanta.cli plot \
@@ -84,6 +92,16 @@ The CLI (shipped as `python -m quanta.cli`) wraps the main flows:
    - Example output:
 
      ![QuanTa CLI Plot Example](docs/images/cli-plot.svg)
+
+5. **Add indicators to cached data**
+
+   ```bash
+   poetry run python -m quanta.cli ta SMA \
+       --source AAPL-1h \
+       --param 10
+   ```
+
+   The shorthand `--param 10` is equivalent to `--param period=10`. Use `--param key=value` for additional parameters.
 
 ### Fetch and Plot Market Data
 

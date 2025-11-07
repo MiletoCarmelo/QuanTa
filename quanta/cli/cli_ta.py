@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Callable, Dict, List
 
 import typer
@@ -52,17 +53,39 @@ def register(
             typer.secho(str(exc), fg=typer.colors.RED)
             raise typer.Exit(code=1) from exc
 
+        param_dict = parse_params(params)
         try:
-            indicator_obj = session.build_indicator(indicator, parse_params(params))
+            indicator_obj = session.build_indicator(indicator, param_dict)
         except KeyError:
             available = ", ".join(sorted(INDICATOR_CLASSES.keys()))
             typer.secho(f"Unknown indicator '{indicator}'. Available: {available}", fg=typer.colors.RED)
             raise typer.Exit(code=1)
 
         enriched = session.ta_client.calculate_indicators(df, [indicator_obj])
-        meta = session.cache.get_metadata(source_key)
-        interval_meta = {"interval": meta["interval"]} if meta.get("interval") else None
-        session.cache.set(target_key or source_key, enriched, metadata=interval_meta)
+        target = target_key or source_key
+        base_meta = session.cache.get_metadata(target)
+        if not base_meta and target != source_key:
+            base_meta = session.cache.get_metadata(source_key)
+
+        indicators_meta = list(base_meta.get("indicators", []))
+        indicator_entry = {
+            "name": indicator,
+            "params": param_dict,
+            "columns": indicator_obj.get_column_names(),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        indicators_meta = [
+            entry
+            for entry in indicators_meta
+            if not (entry.get("name") == indicator_entry["name"] and entry.get("params") == indicator_entry["params"])
+        ]
+        indicators_meta.append(indicator_entry)
+
+        metadata: Dict[str, object] = {"indicators": indicators_meta}
+        if base_meta.get("interval"):
+            metadata["interval"] = base_meta["interval"]
+
+        session.cache.set(target, enriched, metadata=metadata)
         typer.secho(
             f"Indicator '{indicator}' applied. Columns now available: {', '.join(indicator_obj.get_column_names())}",
             fg=typer.colors.GREEN,

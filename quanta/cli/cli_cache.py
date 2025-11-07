@@ -59,7 +59,9 @@ class DataFrameCache:
         info = (metadata or {}).copy()
         existing = self._manifest.get(key, {})
         interval = info.get("interval") or existing.get("interval") or self._infer_interval_label(df)
-        info["interval"] = interval
+        indicators_meta = info.get("indicators")
+        if indicators_meta is None:
+            indicators_meta = existing.get("indicators", [])
         start_date, end_date, distinct_days, avg_rows = self._compute_date_stats(df)
         self._manifest[key] = {
             "path": str(path),
@@ -71,6 +73,7 @@ class DataFrameCache:
             "distinct_days": distinct_days,
             "avg_rows_per_day": avg_rows,
             "interval": interval,
+            "indicators": indicators_meta,
         }
         self._persist_manifest()
 
@@ -163,6 +166,21 @@ class DataFrameCache:
                 # Cache directory might be read-only; ignore persistence errors.
                 pass
         return summaries
+
+    def list_indicator_records(self) -> List[Dict[str, Any]]:
+        records: List[Dict[str, Any]] = []
+        for key, meta in self._manifest.items():
+            for entry in meta.get("indicators", []) or []:
+                records.append(
+                    {
+                        "key": key,
+                        "name": entry.get("name", "unknown"),
+                        "params": entry.get("params", {}),
+                        "columns": entry.get("columns", []),
+                        "updated_at": entry.get("updated_at", meta.get("updated_at", "unknown")),
+                    }
+                )
+        return records
 
     def delete(self, key: str) -> bool:
         meta = self._manifest.pop(key, None)
@@ -317,6 +335,13 @@ def register(app: typer.Typer, get_session: Callable[[], "QuantaSession"]) -> No
             help=CACHE_OPTION_HELP["ticker"],
             is_flag=True,
         ),
+        indicators: bool = typer.Option(
+            False,
+            "--indicators",
+            "-i",
+            help=CACHE_OPTION_HELP["indicators"],
+            is_flag=True,
+        ),
     ) -> None:
         """Perform cache maintenance operations."""
 
@@ -333,11 +358,16 @@ def register(app: typer.Typer, get_session: Callable[[], "QuantaSession"]) -> No
                 return value.lower() in {"1", "true", "yes", "on"}
             return bool(value)
 
-        status_flag, clear_flag, ticker_flag = (_flag(status), _flag(clear), _flag(ticker))
+        status_flag, clear_flag, ticker_flag, indicators_flag = (
+            _flag(status),
+            _flag(clear),
+            _flag(ticker),
+            _flag(indicators),
+        )
 
-        selected_flags = sum(int(flag) for flag in (status_flag, clear_flag, ticker_flag))
+        selected_flags = sum(int(flag) for flag in (status_flag, clear_flag, ticker_flag, indicators_flag))
         if selected_flags > 1:
-            typer.secho("Please select only one of --status, --clear, or --ticker.", fg=typer.colors.RED)
+            typer.secho("Please select only one of --status, --clear, --ticker, or --indicators.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
         if selected_flags == 0:
             status_flag = True
@@ -398,6 +428,34 @@ def register(app: typer.Typer, get_session: Callable[[], "QuantaSession"]) -> No
         if clear_flag:
             removed = cache.clear_all()
             typer.secho(f"Cleared {removed} cached dataset(s).", fg=typer.colors.YELLOW)
+            return
+
+        if indicators_flag:
+            indicator_records = cache.list_indicator_records()
+            if not indicator_records:
+                typer.echo("No indicators recorded yet. Use 'ta' to enrich a dataset.")
+                raise typer.Exit()
+            table = Table(show_header=True, header_style="bold", expand=True)
+            table.add_column("Key", style="bold", no_wrap=True)
+            table.add_column("Indicator")
+            table.add_column("Params")
+            table.add_column("Columns")
+            table.add_column("Updated", overflow="fold")
+
+            for entry in indicator_records:
+                params_dict = entry.get("params") or {}
+                params_display = ", ".join(f"{k}={v}" for k, v in sorted(params_dict.items())) or "-"
+                columns_display = ", ".join(entry.get("columns") or []) or "-"
+                table.add_row(
+                    entry["key"],
+                    entry.get("name", "-"),
+                    params_display,
+                    columns_display,
+                    entry.get("updated_at", "-"),
+                )
+
+            panel = Panel(table, title="Indicators", border_style="magenta", expand=False)
+            CONSOLE.print(panel)
             return
 
         # Status path (default)

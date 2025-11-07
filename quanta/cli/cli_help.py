@@ -19,6 +19,7 @@ CACHE_OPTION_HELP: Dict[str, str] = {
     "status": "Show cached datasets along with last update timestamps.",
     "clear": "Remove every cached dataset from disk.",
     "ticker": "Display each cached ticker with its date range and average rows per day.",
+    "indicators": "Show which indicators have been applied to every cached dataset.",
 }
 
 FETCH_OPTION_HELP: Dict[str, str] = {
@@ -33,7 +34,7 @@ TA_OPTION_HELP: Dict[str, str] = {
     "indicator": "Indicator name (e.g. SMA, RSI, MACD).",
     "source_key": "Cache key to read the DataFrame from.",
     "target_key": "Cache key to store the enriched DataFrame (defaults to source).",
-    "params": "Indicator parameter in key=value form. Repeat for multiple parameters.",
+    "params": "Indicator parameter in key=value form (or just a value to set 'period'). Repeat for multiple parameters.",
 }
 
 PLOT_OPTION_HELP: Dict[str, str] = {
