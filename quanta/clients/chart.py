@@ -2,7 +2,7 @@ import polars as pl
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from typing import Optional, List
-from quanta.utils.ta import TAClient, RSI, MACD, SMA, EMA, BollingerBands, Indicator, Stochastic, ATR
+from quanta.utils.ta import TAClient, RSI, MACD, SMA, EMA, BollingerBands, Indicator, Stochastic, ATR, Volatility
 from quanta.utils.trace import Trace, Candlesticks, Volume, Line
 
 
@@ -88,8 +88,8 @@ class ChartClient:
         # Overlay indicators (SMA, EMA, BB)
         overlay_indicators = [ind for ind in indicators if isinstance(ind, (SMA, EMA, BollingerBands))]
         
-        # Subplot indicators (RSI, MACD, etc.)
-        subplot_indicators = [ind for ind in indicators if isinstance(ind, (RSI, MACD, Stochastic, ATR))]
+        # Subplot indicators (RSI, MACD, Volatility, ATR, etc.)
+        subplot_indicators = [ind for ind in indicators if isinstance(ind, (RSI, MACD, Stochastic, ATR, Volatility))]
         
         # Create subplots
         rows = 1
@@ -302,6 +302,15 @@ class ChartClient:
                         name=ind.name, line=dict(color='orange', width=1.5),  # ← Use ind.name
                     ), row=current_row, col=1)
                     fig.update_yaxes(title_text=ind.name, row=current_row, col=1)  # ← Use ind.name
+                    current_row += 1
+            
+            elif isinstance(ind, Volatility):
+                if ind.name in df.columns:
+                    fig.add_trace(go.Scatter(
+                        x=df[x_column], y=df[ind.name],
+                        name=ind.name, line=dict(color='purple', width=1.5),
+                    ), row=current_row, col=1)
+                    fig.update_yaxes(title_text=ind.name, row=current_row, col=1)
                     current_row += 1
         
         # Professional formatting
