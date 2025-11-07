@@ -27,10 +27,11 @@ def register(
             help=PLOT_OPTION_HELP["cache_key"],
             is_flag=False,
         ),
-        symbol: str = typer.Option(
+        symbol_name: str = typer.Option(
             "Asset",
-            "--symbol",
-            help=PLOT_OPTION_HELP["symbol"],
+            "--symbol-name",
+            "-n",
+            help=PLOT_OPTION_HELP["symbol_name"],
             is_flag=False,
         ),
         indicators: List[str] = typer.Option(
@@ -72,16 +73,9 @@ def register(
                 typer.secho(f"Unknown indicator '{name}'. Available: {available}", fg=typer.colors.RED)
                 raise typer.Exit(code=1)
 
-        if not indicator_objs:
-            indicator_objs = [
-                session.build_indicator("SMA", {"period": 50}),
-                session.build_indicator("SMA", {"period": 200}),
-                session.build_indicator("RSI"),
-            ]
-
         session.chart_client.plot(
             df,
-            symbol=symbol,
+            symbol=symbol_name,
             indicators=indicator_objs,
             max_bars=max_bars,
             x_axis_type=x_axis_type,

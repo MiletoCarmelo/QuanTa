@@ -26,7 +26,7 @@ FETCH_OPTION_HELP: Dict[str, str] = {
     "from_date": "Start date (YYYY-MM-DD).",
     "to_date": "End date (YYYY-MM-DD).",
     "interval": "Yahoo Finance interval, e.g. 1d, 1h.",
-    "cache_key": "Storage name for the downloaded dataset.",
+    "cache_key": "Storage name for the downloaded dataset (defaults to SYMBOL-interval).",
 }
 
 TA_OPTION_HELP: Dict[str, str] = {
@@ -38,7 +38,7 @@ TA_OPTION_HELP: Dict[str, str] = {
 
 PLOT_OPTION_HELP: Dict[str, str] = {
     "cache_key": "Cached DataFrame to visualise.",
-    "symbol": "Display name for the chart title.",
+    "symbol_name": "Display name for the chart title.",
     "indicators": "Indicator spec (NAME or NAME:param=value,param2=value). Repeat for multiple indicators.",
     "max_bars": "Limit the number of rows displayed.",
     "x_axis_type": "row_nb or datetime, passed to ChartClient.",

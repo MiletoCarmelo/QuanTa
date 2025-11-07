@@ -43,7 +43,7 @@ def register(app: typer.Typer, get_session: Callable[[], "QuantaSession"]) -> No
             help=FETCH_OPTION_HELP["cache_key"],
             is_flag=False,
         ),
-    ) -> None:
+        ) -> None:
         """Download OHLCV data from Yahoo Finance and cache it."""
 
         session = get_session()
@@ -51,12 +51,40 @@ def register(app: typer.Typer, get_session: Callable[[], "QuantaSession"]) -> No
         if df is None or not isinstance(df, pl.DataFrame):
             typer.secho("Unable to fetch historical prices with the provided parameters.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
-        target_key = cache_key or symbol
-        session.cache.set(target_key, df, metadata={"interval": interval})
+        target_key = cache_key or _default_cache_key(symbol, interval)
+        metadata = {"interval": interval}
+
+        try:
+            existing = session.cache.get(target_key)
+        except FileNotFoundError:
+            existing = None
+        else:
+            df = _merge_price_frames(existing, df)
+
+        session.cache.set(target_key, df, metadata=metadata)
         typer.secho(
             f"Stored {len(df)} rows for {symbol} under cache key '{target_key}'.",
             fg=typer.colors.GREEN,
         )
+
+
+def _default_cache_key(symbol: str, interval: str) -> str:
+    cleaned_symbol = symbol.replace(" ", "").upper()
+    cleaned_interval = interval.replace(" ", "")
+    return f"{cleaned_symbol}-{cleaned_interval}"
+
+
+def _merge_price_frames(existing: pl.DataFrame, incoming: pl.DataFrame) -> pl.DataFrame:
+    if existing.is_empty():
+        return incoming
+    if incoming.is_empty():
+        return existing
+    combined = pl.concat([existing, incoming], how="vertical", rechunk=True)
+    for candidate in ("datetime", "timestamp", "date"):
+        if candidate in combined.columns:
+            sorted_df = combined.sort(candidate)
+            return sorted_df.unique(subset=[candidate], keep="last")
+    return combined.unique(keep="last")
 
 
 __all__ = ["register"]
