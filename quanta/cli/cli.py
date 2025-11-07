@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from itertools import product
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -90,6 +91,66 @@ class QuantaSession:
         if cls is None:
             raise KeyError(name)
         params = params or {}
+        
+        # Check if we have positional parameters (comma-separated values)
+        # This happens when user passes --param 20,False,close
+        # We look for any parameter value that contains commas
+        for key, value in list(params.items()):
+            if isinstance(value, str) and "," in value:
+                values_str = [v.strip() for v in value.split(",")]
+                
+                # Get parameter names from __init__ signature
+                init_sig = inspect.signature(cls.__init__)
+                param_names = []
+                for param_name, param in init_sig.parameters.items():
+                    if param_name == "self":
+                        continue
+                    param_names.append(param_name)
+                
+                # Only parse if we're dealing with the first parameter (usually "period")
+                # and the number of comma-separated values matches the number of parameters
+                if key == param_names[0] if param_names else False:
+                    if len(values_str) <= len(param_names):
+                        # Remove the original parameter
+                        del params[key]
+                        # Map values to parameter names
+                        for i, val_str in enumerate(values_str):
+                            if i < len(param_names):
+                                param_name = param_names[i]
+                                # Cast value according to parameter annotation
+                                param_obj = init_sig.parameters[param_name]
+                                try:
+                                    # Try to get type from annotation
+                                    if param_obj.annotation != inspect.Parameter.empty:
+                                        ann = param_obj.annotation
+                                        # Handle Union types (like bool from typing)
+                                        if hasattr(ann, '__origin__'):
+                                            # For Union types, check args
+                                            if bool in getattr(ann, '__args__', ()):
+                                                val = val_str.lower() in ("true", "1", "yes", "on")
+                                            elif int in getattr(ann, '__args__', ()):
+                                                val = int(val_str)
+                                            elif float in getattr(ann, '__args__', ()):
+                                                val = float(val_str)
+                                            else:
+                                                val = _cast_value(val_str)
+                                        elif ann == bool:
+                                            # Handle bool values
+                                            val = val_str.lower() in ("true", "1", "yes", "on")
+                                        elif ann == int:
+                                            val = int(val_str)
+                                        elif ann == float:
+                                            val = float(val_str)
+                                        else:
+                                            val = _cast_value(val_str)
+                                    else:
+                                        val = _cast_value(val_str)
+                                    params[param_name] = val
+                                except (ValueError, TypeError):
+                                    # Fallback to string if casting fails
+                                    params[param_name] = val_str
+                        break  # Only process the first comma-separated parameter
+        
         return cls(**params)
 
 
