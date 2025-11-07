@@ -81,6 +81,9 @@ The CLI (shipped as `python -m quanta.cli`) wraps the main flows:
 
    - `--symbol-name / -n` labels the Plotly figure.  
    - Indicators are optional; none are drawn unless you pass `--indicator`.
+   - Example output:
+
+     ![QuanTa CLI Plot Example](docs/images/cli-plot.svg)
 
 ### Fetch and Plot Market Data
 
