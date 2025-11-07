@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from itertools import product
 from typing import Any, Dict, List, Optional, Tuple
 
 import typer
@@ -48,19 +49,31 @@ def _parse_params(pairs: List[str]) -> Dict[str, Any]:
     return params
 
 
-def _parse_indicator_spec(spec: str) -> Tuple[str, Dict[str, Any]]:
+def _parse_indicator_spec(spec: str) -> Tuple[str, List[Dict[str, Any]]]:
     if ":" not in spec:
-        return spec, {}
+        return spec, [{}]
     name, raw_params = spec.split(":", 1)
-    params = {}
+    key_to_values: Dict[str, List[Any]] = {}
+    current_key: Optional[str] = None
     for chunk in raw_params.split(","):
         if not chunk:
             continue
         if "=" not in chunk:
-            raise typer.BadParameter(f"Indicator chunk '{chunk}' must use key=value.")
+            if current_key is None:
+                raise typer.BadParameter(f"Indicator chunk '{chunk}' must use key=value.")
+            key_to_values.setdefault(current_key, []).append(_cast_value(chunk))
+            continue
         key, value = chunk.split("=", 1)
-        params[key] = _cast_value(value)
-    return name, params
+        current_key = key
+        key_to_values.setdefault(key, []).append(_cast_value(value))
+    params_list: List[Dict[str, Any]] = []
+    if not key_to_values:
+        params_list.append({})
+    else:
+        keys = list(key_to_values.keys())
+        for combo in product(*(key_to_values[k] for k in keys)):
+            params_list.append({k: v for k, v in zip(keys, combo)})
+    return name, params_list
 
 
 class QuantaSession:

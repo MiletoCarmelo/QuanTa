@@ -14,7 +14,7 @@ from .cli_help import PLOT_HELP, PLOT_OPTION_HELP
 def register(
     app: typer.Typer,
     get_session: Callable[[], "QuantaSession"],
-    parse_indicator_spec: Callable[[str], tuple[str, dict]],
+    parse_indicator_spec: Callable[[str], tuple[str, List[dict]]],
 ) -> None:
     """Attach plotting commands to the main Typer app."""
 
@@ -65,9 +65,10 @@ def register(
 
         indicator_objs = []
         for spec in indicators:
-            name, params = parse_indicator_spec(spec)
+            name, params_list = parse_indicator_spec(spec)
             try:
-                indicator_objs.append(session.build_indicator(name, params))
+                for params in params_list:
+                    indicator_objs.append(session.build_indicator(name, params))
             except KeyError:
                 available = ", ".join(sorted(INDICATOR_CLASSES.keys()))
                 typer.secho(f"Unknown indicator '{name}'. Available: {available}", fg=typer.colors.RED)
