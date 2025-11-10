@@ -147,7 +147,7 @@ STRATEGIES_IMPLEMENTED = {
     'simple_strategy': {
         'description': 'Simple strategy based on SMA crossovers and RSI levels.',
         'parameters': ['short_window', 'long_window', 'rsi_period', 'stop_loss', 'atr_period', 'take_profit', 'position_size', 'macd_hist_buy_threshold', 'macd_hist_sell_threshold'],
-        'required_indicators': ['SMA_short', 'SMA_long', 'RSI', 'MACD', 'ATR'],
+        'required_indicators': ['SMA_short', 'SMA_long', 'RSI', 'MACD', 'ATR', 'BollingerBands'],
         'function': 'simple_strategy_fct'
     }
 }
