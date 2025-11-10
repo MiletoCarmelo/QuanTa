@@ -224,6 +224,34 @@ class ATR(Indicator):
         return [self.name]
 
 
+class Volatility(Indicator):
+    """Historical Volatility (standard deviation of returns)."""
+    
+    def __init__(self, period: int = 20, annualize: bool = True, column: str = 'close'):
+        self.period = period
+        self.annualize = annualize
+        self.column = column
+        self.name = f'Volatility{period}'
+    
+    def calculate(self, df: pl.DataFrame) -> pl.DataFrame:
+        # Calculate returns (percentage change)
+        returns = pl.col(self.column).pct_change()
+        
+        # Calculate rolling standard deviation of returns
+        volatility = returns.rolling_std(window_size=self.period)
+        
+        # Annualize if requested (multiply by sqrt of periods per year)
+        # Assuming daily data (252 trading days per year)
+        # For other timeframes, users can set annualize=False
+        if self.annualize:
+            volatility = volatility * (252 ** 0.5)
+        
+        return df.with_columns(volatility.alias(self.name))
+
+    def get_column_names(self):
+        return [self.name]
+
+
 # ========== Volume Indicators ==========
 
 class OBV(Indicator):
@@ -291,7 +319,8 @@ INDICATOR_CLASSES = {
     'RSI': RSI,
     'MACD': MACD,
     'BollingerBands': BollingerBands,
-    'ATR': ATR,  
+    'ATR': ATR,
+    'Volatility': Volatility,
 }
 
 

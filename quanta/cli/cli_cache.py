@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -16,6 +17,7 @@ from rich.table import Table
 import typer
 
 from .cli_help import CACHE_HELP, CACHE_OPTION_HELP
+from quanta.utils.ta import INDICATOR_CLASSES
 
 CONSOLE = Console()
 
@@ -342,6 +344,13 @@ def register(app: typer.Typer, get_session: Callable[[], "QuantaSession"]) -> No
             help=CACHE_OPTION_HELP["indicators"],
             is_flag=True,
         ),
+        available_indicators: bool = typer.Option(
+            False,
+            "--available-indicators",
+            "-a",
+            help=CACHE_OPTION_HELP["available_indicators"],
+            is_flag=True,
+        ),
     ) -> None:
         """Perform cache maintenance operations."""
 
@@ -358,19 +367,74 @@ def register(app: typer.Typer, get_session: Callable[[], "QuantaSession"]) -> No
                 return value.lower() in {"1", "true", "yes", "on"}
             return bool(value)
 
-        status_flag, clear_flag, ticker_flag, indicators_flag = (
+        status_flag, clear_flag, ticker_flag, indicators_flag, available_indicators_flag = (
             _flag(status),
             _flag(clear),
             _flag(ticker),
             _flag(indicators),
+            _flag(available_indicators),
         )
 
-        selected_flags = sum(int(flag) for flag in (status_flag, clear_flag, ticker_flag, indicators_flag))
+        selected_flags = sum(int(flag) for flag in (status_flag, clear_flag, ticker_flag, indicators_flag, available_indicators_flag))
         if selected_flags > 1:
-            typer.secho("Please select only one of --status, --clear, --ticker, or --indicators.", fg=typer.colors.RED)
+            typer.secho("Please select only one of --status, --clear, --ticker, --indicators, or --available-indicators.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
         if selected_flags == 0:
             status_flag = True
+
+        if available_indicators_flag:
+            available_indicators = list(INDICATOR_CLASSES.keys())
+            if not available_indicators:
+                typer.echo("No indicators available.")
+                raise typer.Exit()
+            
+            table = Table(
+                show_header=True,
+                header_style="bold",
+                expand=True,
+            )
+            table.add_column("Indicator", style="bold cyan", no_wrap=True)
+            table.add_column("Description", overflow="fold")
+            table.add_column("Default Params", overflow="fold")
+            table.add_column("Columns", overflow="fold")
+            
+            for indicator_name in sorted(available_indicators):
+                indicator_class = INDICATOR_CLASSES[indicator_name]
+                # Get docstring
+                doc = inspect.getdoc(indicator_class) or "No description available"
+                # Get default parameters from __init__
+                init_sig = inspect.signature(indicator_class.__init__)
+                default_params = []
+                for param_name, param in init_sig.parameters.items():
+                    if param_name == 'self':
+                        continue
+                    if param.default != inspect.Parameter.empty:
+                        default_params.append(f"{param_name}={param.default}")
+                params_display = ", ".join(default_params) if default_params else "-"
+                # Get columns by instantiating with defaults
+                try:
+                    args = {}
+                    for param_name, param in init_sig.parameters.items():
+                        if param_name == 'self':
+                            continue
+                        if param.default != inspect.Parameter.empty:
+                            args[param_name] = param.default
+                    instance = indicator_class(**args)
+                    columns = instance.get_column_names()
+                    columns_display = ", ".join(columns) if columns else "-"
+                except Exception:
+                    columns_display = "?"
+                
+                table.add_row(
+                    indicator_name,
+                    doc.split('\n')[0] if doc else "No description",
+                    params_display,
+                    columns_display,
+                )
+            
+            panel = Panel(table, title="Available Indicators", border_style="green", expand=False)
+            CONSOLE.print(panel)
+            return
 
         if ticker_flag:
             summaries = cache.describe_keys()

@@ -20,6 +20,7 @@ CACHE_OPTION_HELP: Dict[str, str] = {
     "clear": "Remove every cached dataset from disk.",
     "ticker": "Display each cached ticker with its date range and average rows per day.",
     "indicators": "Show which indicators have been applied to every cached dataset.",
+    "available_indicators": "List available indicators."
 }
 
 FETCH_OPTION_HELP: Dict[str, str] = {
