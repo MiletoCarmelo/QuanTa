@@ -1,7 +1,8 @@
 import polars as pl
+import numpy as np
 from abc import ABC, abstractmethod
 from quanta.clients.yfinance import YahooFinanceClient
-
+import talib
 # ========== Base Class ==========
 
 class Indicator(ABC):
@@ -159,46 +160,69 @@ class MACD(Indicator):
 
 
 class Stochastic(Indicator):
-    """Stochastic Oscillator."""
+    """Stochastic Oscillator - momentum indicator comparing closing price to price range.
     
-    def __init__(self, period: int = 14, smooth_k: int = 3, smooth_d: int = 3):
-        self.period = period
-        self.smooth_k = smooth_k
-        self.smooth_d = smooth_d
+    Returns %K and %D (smoothed %K).
+    Values: 0-100
+    - < 20: Oversold (potential buy signal)
+    - > 80: Overbought (potential sell signal)
+    """
+    
+    def __init__(self, k_period: int = 14, k_slow: int = 3, d_period: int = 3):
+        self.k_period = k_period
+        self.k_slow = k_slow
+        self.d_period = d_period
+        self.name = f'Stoch{k_period}_{k_slow}_{d_period}'
     
     def calculate(self, df: pl.DataFrame) -> pl.DataFrame:
-        lowest_low = pl.col('low').rolling_min(window_size=self.period)
-        highest_high = pl.col('high').rolling_max(window_size=self.period)
+        # Convert Polars columns to numpy arrays for TA-Lib
+        high_arr = df['high'].to_numpy()
+        low_arr = df['low'].to_numpy()
+        close_arr = df['close'].to_numpy()
         
-        k = ((pl.col('close') - lowest_low) / (highest_high - lowest_low)) * 100
-        k_smooth = k.rolling_mean(window_size=self.smooth_k)
-        d = k_smooth.rolling_mean(window_size=self.smooth_d)
+        # Calculate Stochastic using TA-Lib
+        slowk, slowd = talib.STOCH(high_arr, low_arr, close_arr, 
+                                    fastk_period=self.k_period,
+                                    slowk_period=self.k_slow,
+                                    slowk_matype=0,
+                                    slowd_period=self.d_period,
+                                    slowd_matype=0)
         
         return df.with_columns([
-            k_smooth.alias('STOCH_K'),
-            d.alias('STOCH_D')
+            pl.Series(f'{self.name}_K', slowk),
+            pl.Series(f'{self.name}_D', slowd)
         ])
     
     def get_column_names(self):
-        return ['STOCH_K', 'STOCH_D']
+        return [f'{self.name}_K', f'{self.name}_D']
 
 
 class CCI(Indicator):
-    """Commodity Channel Index."""
+    """Commodity Channel Index - identifies cyclical trends and overbought/oversold conditions.
     
-    def __init__(self, period: int = 20):
+    Values: typically -100 to +100, but can exceed
+    - < -100: Oversold (potential buy signal)
+    - > +100: Overbought (potential sell signal)
+    - Between -100 and +100: Normal range
+    """
+    
+    def __init__(self, period: int = 14):
         self.period = period
+        self.name = f'CCI{period}'
     
     def calculate(self, df: pl.DataFrame) -> pl.DataFrame:
-        tp = (pl.col('high') + pl.col('low') + pl.col('close')) / 3
-        sma = tp.rolling_mean(window_size=self.period)
-        mad = (tp - sma).abs().rolling_mean(window_size=self.period)
-        cci = (tp - sma) / (0.015 * mad)
+        # Convert Polars columns to numpy arrays for TA-Lib
+        high_arr = df['high'].to_numpy()
+        low_arr = df['low'].to_numpy()
+        close_arr = df['close'].to_numpy()
         
-        return df.with_columns(cci.alias('CCI'))
+        # Calculate CCI using TA-Lib
+        cci = talib.CCI(high_arr, low_arr, close_arr, timeperiod=self.period)
+        
+        return df.with_columns(pl.Series(self.name, cci))
     
     def get_column_names(self):
-        return ['CCI']
+        return [self.name]
 
 
 # ========== Volatility Indicators ==========
@@ -252,6 +276,60 @@ class Volatility(Indicator):
         return [self.name]
 
 
+# ========== Candlestick Patterns ==========
+
+class EngulfingPattern(Indicator):
+    """Bullish and Bearish Engulfing Pattern using TA-Lib CDLENGULFING."""
+    
+    def __init__(self, separate_columns: bool = False):
+        """
+        Initialize Engulfing Pattern indicator.
+        
+        Args:
+            separate_columns: If True, creates separate columns for bullish and bearish.
+                            If False, creates a single column with values: 1 (bullish), -1 (bearish), 0 (none)
+        """
+        self.separate_columns = separate_columns
+    
+    def calculate(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Calculate Engulfing Pattern using TA-Lib CDLENGULFING.
+        
+        CDLENGULFING returns:
+        - 100 for Bullish Engulfing
+        - -100 for Bearish Engulfing  
+        - 0 otherwise
+        """
+        # Convert Polars columns to numpy arrays for TA-Lib
+        open_arr = df['open'].to_numpy()
+        high_arr = df['high'].to_numpy()
+        low_arr = df['low'].to_numpy()
+        close_arr = df['close'].to_numpy()
+        
+        # Calculate engulfing pattern using TA-Lib
+        engulfing = talib.CDLENGULFING(open_arr, high_arr, low_arr, close_arr)
+        
+        if self.separate_columns:
+            # Create separate columns for bullish and bearish
+            bullish = (engulfing == 100).astype(np.int32)
+            bearish = (engulfing == -100).astype(np.int32)
+            
+            return df.with_columns([
+                pl.Series('Engulfing_Bullish', bullish),
+                pl.Series('Engulfing_Bearish', bearish)
+            ])
+        else:
+            # Create single column: 1 for bullish, -1 for bearish, 0 for none
+            pattern = np.where(engulfing == 100, 1, np.where(engulfing == -100, -1, 0))
+            return df.with_columns(pl.Series('Engulfing', pattern))
+    
+    def get_column_names(self):
+        if self.separate_columns:
+            return ['Engulfing_Bullish', 'Engulfing_Bearish']
+        else:
+            return ['Engulfing']
+
+
 # ========== Volume Indicators ==========
 
 class OBV(Indicator):
@@ -289,6 +367,61 @@ class VWAP(Indicator):
         return ['VWAP']
 
 
+class ADX(Indicator):
+    """Average Directional Index - measures trend strength (not direction).
+    
+    ADX values:
+    - 0-20: Weak/no trend (good for mean reversion strategies)
+    - 20-40: Moderate trend
+    - 40+: Strong trend (avoid mean reversion)
+    """
+    
+    def __init__(self, period: int = 14):
+        self.period = period
+        self.name = f'ADX{period}'
+    
+    def calculate(self, df: pl.DataFrame) -> pl.DataFrame:
+        # Convert Polars columns to numpy arrays for TA-Lib
+        high_arr = df['high'].to_numpy()
+        low_arr = df['low'].to_numpy()
+        close_arr = df['close'].to_numpy()
+        
+        # Calculate ADX using TA-Lib
+        adx = talib.ADX(high_arr, low_arr, close_arr, timeperiod=self.period)
+        
+        return df.with_columns(pl.Series(self.name, adx))
+    
+    def get_column_names(self):
+        return [self.name]
+
+
+class WilliamsR(Indicator):
+    """Williams %R - momentum indicator similar to Stochastic but inverted.
+    
+    Values: -100 to 0
+    - < -80: Oversold (potential buy signal)
+    - > -20: Overbought (potential sell signal)
+    """
+    
+    def __init__(self, period: int = 14):
+        self.period = period
+        self.name = f'WilliamsR{period}'
+    
+    def calculate(self, df: pl.DataFrame) -> pl.DataFrame:
+        # Convert Polars columns to numpy arrays for TA-Lib
+        high_arr = df['high'].to_numpy()
+        low_arr = df['low'].to_numpy()
+        close_arr = df['close'].to_numpy()
+        
+        # Calculate Williams %R using TA-Lib
+        willr = talib.WILLR(high_arr, low_arr, close_arr, timeperiod=self.period)
+        
+        return df.with_columns(pl.Series(self.name, willr))
+    
+    def get_column_names(self):
+        return [self.name]
+
+
 # ========== TAClient ==========
 
 class TAClient:
@@ -321,6 +454,13 @@ INDICATOR_CLASSES = {
     'BollingerBands': BollingerBands,
     'ATR': ATR,
     'Volatility': Volatility,
+    'EngulfingPattern': EngulfingPattern,
+    'OBV': OBV,
+    'VWAP': VWAP,
+    'ADX': ADX,
+    'Stochastic': Stochastic,
+    'WilliamsR': WilliamsR,
+    'CCI': CCI,
 }
 
 
@@ -340,7 +480,8 @@ if __name__ == "__main__":
         MACD(),
         BollingerBands(),
         ATR(),
-        OBV()
+        OBV(),
+        VWAP()
     ]
     
     # Calculate indicators

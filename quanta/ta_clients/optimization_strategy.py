@@ -24,8 +24,8 @@ OPTIMIZATION_CONFIG = {
             "params": {
                 "period": {
                     "type": "int",
-                    "low": 20,
-                    "high": 200
+                    "low": 15,
+                    "high": 50  # Further reduced from 80 to minimize lagging influence
                 }
             }
         },
@@ -83,6 +83,66 @@ OPTIMIZATION_CONFIG = {
                     "high": 12
                 }
             }
+        },
+        "EngulfingPattern": {
+            "class": "EngulfingPattern",
+            "params": {
+                "separate_columns": {
+                    "type": "bool",
+                    "value": False
+                }
+            }
+        },
+        "ADX": {
+            "class": "ADX",
+            "params": {
+                "period": {
+                    "type": "int",
+                    "low": 10,
+                    "high": 20
+                }
+            }
+        },
+        # Optional momentum oscillators - can complement or replace RSI
+        "Stochastic": {
+            "class": "Stochastic",
+            "params": {
+                "k_period": {
+                    "type": "int",
+                    "low": 10,
+                    "high": 20
+                },
+                "k_slow": {
+                    "type": "int",
+                    "low": 2,
+                    "high": 5
+                },
+                "d_period": {
+                    "type": "int",
+                    "low": 2,
+                    "high": 5
+                }
+            }
+        },
+        "WilliamsR": {
+            "class": "WilliamsR",
+            "params": {
+                "period": {
+                    "type": "int",
+                    "low": 10,
+                    "high": 20
+                }
+            }
+        },
+        "CCI": {
+            "class": "CCI",
+            "params": {
+                "period": {
+                    "type": "int",
+                    "low": 10,
+                    "high": 20
+                }
+            }
         }
     },
     "strategy": {
@@ -103,6 +163,13 @@ OPTIMIZATION_CONFIG = {
             "low": 0.2,
             "high": 0.8
         },
+    },
+    "signals": {
+        "use_engulfing": {
+            "type": "bool",
+            "value": False,
+            "description": "If True, Engulfing pattern is required for signal generation (Bullish for BUY, Bearish for SELL). Auto-detected if EngulfingPattern is in indicators."
+        },
         "macd_hist_buy_threshold": {
             "type": "float",
             "low": -1.0,  # Widened to be less restrictive (allows more signals)
@@ -114,12 +181,18 @@ OPTIMIZATION_CONFIG = {
             "low": -0.5,
             "high": 1.0,  # Widened to be less restrictive (allows more signals)
             "description": "MACD_hist threshold to avoid selling during strong rise (must be < this value). Higher value = less restrictive."
+        },
+        "adx_threshold": {
+            "type": "float",
+            "low": 20.0,
+            "high": 35.0,
+            "description": "ADX threshold - only trade when ADX < this value (mean reversion works better in range markets). Lower = more restrictive (fewer trades in trends)."
         }
     },
     "constraints": [
         
         # 1. Basic constraints: 
-        {"condition": "SMA_long_period >= SMA_short_period + 50"}, # Ensure short period is less than long period and force a TRUE difference between SMAs
+        {"condition": "SMA_long_period >= SMA_short_period + 10"}, # Ensure short period is less than long period with minimal gap (reduced from +20 to +10 for more flexibility)
         {"condition": "MACD_fast_period < MACD_slow_period"}, # (convention) This is a convention in technical analysis, fast EMA must be less than slow EMA. MACD (Moving Average Convergence Divergence) compares two exponential moving averages (EMA) of different periods to identify trends and potential reversal points in asset price.
         {"condition": "MACD_signal_period < MACD_slow_period"}, # (convention) MACD signal must be shorter than slow 
         
@@ -134,19 +207,26 @@ OPTIMIZATION_CONFIG = {
     
     ],
     "optimization": {
-        "direction": "maximize",
+        "target": "sharpe_ratio",  # Metric to optimize (sharpe_ratio, total_return, cagr, max_drawdown)
+        # "direction" is auto-determined based on target:
+        #   - max_drawdown → minimize
+        #   - sharpe_ratio, total_return, cagr → maximize
+        # You can override by explicitly setting "direction": "minimize" or "maximize"
         "n_trials": 1000,
         "n_jobs": 1,
         "timeout": 3600,
-        "seed": 42
+        "seed": 42,
+        # Optional: metrics to track (but not optimize)
+        "track_metrics": ["total_return", "cagr", "max_drawdown"]
     }
 }
 
 
 STRATEGIES_IMPLEMENTED = {
     'simple_strategy': {
-        'description': 'Simple strategy based on SMA crossovers and RSI levels.',
-        'parameters': ['short_window', 'long_window', 'rsi_period', 'stop_loss', 'atr_period', 'take_profit', 'position_size', 'macd_hist_buy_threshold', 'macd_hist_sell_threshold'],
+        'description': 'Simple strategy based on SMA crossovers and RSI levels with optional Engulfing pattern confirmation.',
+        'parameters': ['short_window', 'long_window', 'rsi_period', 'stop_loss', 'atr_period', 'take_profit', 'position_size'],
+        'signal_parameters': ['use_engulfing', 'macd_hist_buy_threshold', 'macd_hist_sell_threshold', 'adx_threshold'],
         'required_indicators': ['SMA_short', 'SMA_long', 'RSI', 'MACD', 'ATR', 'BollingerBands'],
         'function': 'simple_strategy_fct'
     }
@@ -168,6 +248,8 @@ class BacktestStrategyCore:
             position_size: float,
             macd_hist_buy_threshold: float = -0.5,   # Threshold to avoid buying during free fall (less restrictive default)
             macd_hist_sell_threshold: float = 0.5,  # Threshold to avoid selling during strong rise (less restrictive default)
+            adx_threshold: float = 25.0,  # ADX threshold - only trade when ADX < this value (mean reversion works better in range)
+            use_engulfing: bool = False,  # If True, Engulfing pattern is required for signal
             return_trades: bool = False
     ) -> dict:
         df = df.clone().drop_nulls()
@@ -185,33 +267,135 @@ class BacktestStrategyCore:
         # - Do not BUY during a strong bearish trend (strong negative momentum)
         # Using MACD to detect momentum strength
         
-        # Build base conditions (less restrictive for more signals)
-        # Relaxed conditions: reduced SMA thresholds, widened RSI levels, relaxed ATR filter
+        # Build base conditions - RSI and ATR are the main drivers
+        # SMA_long is now optional/very soft - focus on mean reversion signals
+        # Optional oscillators (Stochastic, WilliamsR, CCI) can complement RSI
+        
+        # RSI condition (main oscillator)
+        rsi_oversold = pl.col(f'RSI{rsi_period}') < 45
+        rsi_overbought = pl.col(f'RSI{rsi_period}') > 55
+        
+        # Optional: Add Stochastic filter if available (complements RSI)
+        stoch_col_k = None
+        stoch_col_d = None
+        for col in df.columns:
+            if col.startswith('Stoch') and col.endswith('_K'):
+                stoch_col_k = col
+                stoch_col_d = col.replace('_K', '_D')
+                break
+        
+        if stoch_col_k and stoch_col_k in df.columns:
+            # Stochastic < 20 = oversold, > 80 = overbought
+            stoch_oversold = pl.col(stoch_col_k) < 20
+            stoch_overbought = pl.col(stoch_col_k) > 80
+            # Combine with RSI (both must agree for stronger signal)
+            rsi_oversold = rsi_oversold & stoch_oversold
+            rsi_overbought = rsi_overbought & stoch_overbought
+        
+        # Optional: Add Williams %R filter if available
+        willr_col = None
+        for col in df.columns:
+            if col.startswith('WilliamsR'):
+                willr_col = col
+                break
+        
+        if willr_col and willr_col in df.columns:
+            # Williams %R < -80 = oversold, > -20 = overbought
+            willr_oversold = pl.col(willr_col) < -80
+            willr_overbought = pl.col(willr_col) > -20
+            # Combine with RSI (both must agree for stronger signal)
+            rsi_oversold = rsi_oversold & willr_oversold
+            rsi_overbought = rsi_overbought & willr_overbought
+        
+        # Optional: Add CCI filter if available
+        cci_col = None
+        for col in df.columns:
+            if col.startswith('CCI'):
+                cci_col = col
+                break
+        
+        if cci_col and cci_col in df.columns:
+            # CCI < -100 = oversold, > 100 = overbought
+            cci_oversold = pl.col(cci_col) < -100
+            cci_overbought = pl.col(cci_col) > 100
+            # Combine with RSI (both must agree for stronger signal)
+            rsi_oversold = rsi_oversold & cci_oversold
+            rsi_overbought = rsi_overbought & cci_overbought
+        
+        # BUY: Oversold conditions + volatility (mean reversion opportunity)
         buy_base_condition = (
-            (pl.col(f'SMA{short_window}') < pl.col(f'SMA{long_window}') * 0.995) &  # Reduced from 0.98 to 0.995 (less restrictive)
-            (pl.col(f'RSI{rsi_period}') < 45) &  # Widened from 40 to 45 (less restrictive)
-            (pl.col(f'ATR{atr_period}') > atr_mean * 0.6)  # Reduced from 0.8 to 0.6 (less restrictive)
+            rsi_oversold &  # RSI (and optional oscillators) oversold
+            (pl.col(f'ATR{atr_period}') > atr_mean * 0.6)  # Sufficient volatility
         )
         
+        # SELL: Overbought conditions + volatility (mean reversion opportunity)
         sell_base_condition = (
-            (pl.col(f'SMA{short_window}') > pl.col(f'SMA{long_window}') * 1.005) &  # Reduced from 1.02 to 1.005 (less restrictive)
-            (pl.col(f'RSI{rsi_period}') > 55) &  # Reduced from 60 to 55 (less restrictive)
-            (pl.col(f'ATR{atr_period}') > atr_mean * 0.6)  # Reduced from 0.8 to 0.6 (less restrictive)
+            rsi_overbought &  # RSI (and optional oscillators) overbought
+            (pl.col(f'ATR{atr_period}') > atr_mean * 0.6)  # Sufficient volatility
         )
         
-        # Add MACD filter if available (avoids signals during strong trends)
+        # Optional: Add very soft SMA_long filter if you want (can be disabled by making condition always True)
+        # This is now truly optional - comment out or remove if not needed
+        use_sma_filter = True  # Set to False to completely disable SMA_long influence
+        if use_sma_filter:
+            # Calculate SMA_long slope for optional trend context
+            df = df.with_columns([
+                ((pl.col(f'SMA{long_window}').diff() / pl.col(f'SMA{long_window}').shift(1).fill_null(1.0)) * 100)
+                .alias('SMA_long_slope_pct')
+            ])
+            # Very permissive: only filter out extreme opposite trends
+            buy_base_condition = buy_base_condition & (
+                (pl.col(f'SMA{short_window}') < pl.col(f'SMA{long_window}') * 1.02) |  # Short can be up to 2% above long
+                (pl.col('SMA_long_slope_pct') < 0.2)  # OR long SMA declining/flat (very soft)
+            )
+            sell_base_condition = sell_base_condition & (
+                (pl.col(f'SMA{short_window}') > pl.col(f'SMA{long_window}') * 0.98) |  # Short can be up to 2% below long
+                (pl.col('SMA_long_slope_pct') > -0.2)  # OR long SMA rising/flat (very soft)
+            )
+        
+        # Add ADX filter if available (avoids signals during strong trends - mean reversion works better in range)
+        # ADX measures trend strength: < 25 = weak trend (good for mean reversion), > 25 = strong trend (avoid)
+        adx_period = None
+        for col in df.columns:
+            if col.startswith('ADX'):
+                adx_period = int(col.replace('ADX', ''))
+                break
+        
+        if adx_period and f'ADX{adx_period}' in df.columns:
+            # Only trade when trend is weak (ADX < threshold) - mean reversion works better in range markets
+            # Threshold is now optimizable via adx_threshold parameter
+            buy_condition = buy_base_condition & (pl.col(f'ADX{adx_period}') < adx_threshold)
+            sell_condition = sell_base_condition & (pl.col(f'ADX{adx_period}') < adx_threshold)
+        else:
+            buy_condition = buy_base_condition
+            sell_condition = sell_base_condition
+        
+        # Add MACD filter if available (avoids signals during strong momentum)
         # Thresholds are now optimizable via macd_hist_buy_threshold and macd_hist_sell_threshold
         if 'MACD_hist' in df.columns:
             # Do not buy if bearish momentum is very strong (free fall)
             # MACD_hist must be greater than threshold to allow buying
-            buy_condition = buy_base_condition & (pl.col('MACD_hist') > macd_hist_buy_threshold)
+            buy_condition = buy_condition & (pl.col('MACD_hist') > macd_hist_buy_threshold)
             # Do not sell if bullish momentum is very strong (strong rise)
             # MACD_hist must be less than threshold to allow selling
-            sell_condition = sell_base_condition & (pl.col('MACD_hist') < macd_hist_sell_threshold)
-        else:
-            # If MACD doesn't exist, use base conditions
-            buy_condition = buy_base_condition
-            sell_condition = sell_base_condition
+            sell_condition = sell_condition & (pl.col('MACD_hist') < macd_hist_sell_threshold)
+        
+        # Add Engulfing Pattern filter if enabled
+        # Bullish Engulfing confirms buy signals, Bearish Engulfing confirms sell signals
+        # IMPORTANT: Pattern is detected at the END of candle N, so we check pattern from previous candle (shift(1))
+        # to generate signal at the BEGINNING of next candle (N+1)
+        if use_engulfing:
+            # Check which column format is used
+            if 'Engulfing' in df.columns:
+                # Single column format: 1 = bullish, -1 = bearish, 0 = none
+                # Check pattern from previous candle (shift(1)) to open at beginning of current candle
+                buy_condition = buy_condition & (pl.col('Engulfing').shift(1) == 1)
+                sell_condition = sell_condition & (pl.col('Engulfing').shift(1) == -1)
+            elif 'Engulfing_Bullish' in df.columns and 'Engulfing_Bearish' in df.columns:
+                # Separate columns format
+                # Check pattern from previous candle (shift(1)) to open at beginning of current candle
+                buy_condition = buy_condition & (pl.col('Engulfing_Bullish').shift(1) == 1)
+                sell_condition = sell_condition & (pl.col('Engulfing_Bearish').shift(1) == 1)
         
         df = df.with_columns([
             pl.when(
@@ -436,12 +620,25 @@ class StrategyClient:
         return INDICATOR_CLASSES
     
     def print_strategies(self):
-        """Displays available strategies."""
+        """Displays available strategies with required and optional indicators."""
         print("Available strategies:")
         for name, info in STRATEGIES_IMPLEMENTED.items():
             print(f"\n  {name}:")
             print(f"    Description: {info['description']}")
             print(f"    Required indicators: {info['required_indicators']}")
+            
+            # Get optional indicators from OPTIMIZATION_CONFIG
+            required_set = set(info['required_indicators'])
+            all_indicators = set(OPTIMIZATION_CONFIG.get('indicators', {}).keys())
+            optional_indicators = sorted(all_indicators - required_set)
+            
+            if optional_indicators:
+                print(f"    Optional indicators: {optional_indicators}")
+            
+            # Display signal parameters
+            signal_params = info.get('signal_parameters', [])
+            if signal_params:
+                print(f"    Signal parameters: {signal_params}")
             
     def get_strategy_fct(self, strategy_name: str):
         """

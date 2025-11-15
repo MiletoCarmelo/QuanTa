@@ -2,8 +2,9 @@ import polars as pl
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from typing import Optional, List
-from quanta.utils.ta import TAClient, RSI, MACD, SMA, EMA, BollingerBands, Indicator, Stochastic, ATR, Volatility
+from quanta.utils.ta import TAClient, RSI, MACD, SMA, EMA, BollingerBands, Indicator, Stochastic, ATR, Volatility, ADX, WilliamsR, CCI
 from quanta.utils.trace import Trace, Candlesticks, Volume, Line
+from quanta.clients.risk import RiskClient
 
 
 class ChartClient:
@@ -11,6 +12,7 @@ class ChartClient:
     
     def __init__(self):
         self.ta_client = TAClient()
+        self.risk_client = RiskClient()
     
     def plot(self, df: pl.DataFrame, symbol: str = "Stock", 
              traces: Optional[List] = None, 
@@ -88,8 +90,8 @@ class ChartClient:
         # Overlay indicators (SMA, EMA, BB)
         overlay_indicators = [ind for ind in indicators if isinstance(ind, (SMA, EMA, BollingerBands))]
         
-        # Subplot indicators (RSI, MACD, Volatility, ATR, etc.)
-        subplot_indicators = [ind for ind in indicators if isinstance(ind, (RSI, MACD, Stochastic, ATR, Volatility))]
+        # Subplot indicators (RSI, MACD, Volatility, ATR, ADX, Stochastic, WilliamsR, CCI, etc.)
+        subplot_indicators = [ind for ind in indicators if isinstance(ind, (RSI, MACD, Stochastic, ATR, Volatility, ADX, WilliamsR, CCI))]
         
         # Create subplots
         rows = 1
@@ -98,6 +100,15 @@ class ChartClient:
         if volume_trace:
             rows += 1
             row_heights.append(0.15)
+        
+        # Check if trades_df has PnL data for PnL subplot
+        has_pnl_data = (trades_df is not None and 
+                       len(trades_df) > 0 and 
+                       'cumulative_capital' in trades_df.columns)
+        
+        if has_pnl_data:
+            rows += 1
+            row_heights.append(0.2)  # PnL subplot gets more space
         
         for _ in subplot_indicators:
             rows += 1
@@ -237,6 +248,81 @@ class ChartClient:
             fig.update_yaxes(title_text="Volume", row=current_row, col=1)
             current_row += 1
         
+        # === PnL (Profit and Loss) ===
+        if has_pnl_data:
+            # Prepare X-axis for PnL (same logic as for trades markers)
+            x_col_pnl = 'x_value'
+            if 'x_value' not in trades_df.columns:
+                if x_axis_type == 'row_nb':
+                    # Need to join with df to get x_index
+                    if 'timestamp' in trades_df.columns:
+                        trades_df = trades_df.join(
+                            df.select(['datetime', 'x_index']),
+                            left_on='timestamp',
+                            right_on='datetime',
+                            how='left'
+                        ).rename({'x_index': 'x_value'})
+                        x_col_pnl = 'x_value'
+                else:
+                    # Use timestamp directly
+                    if 'timestamp' in trades_df.columns:
+                        x_col_pnl = 'timestamp'
+            
+            # Recalculate cumulative capital from PnL (more reliable than using pre-calculated)
+            # The 'pnl' column contains strategy_returns which are returns (not absolute PnL)
+            # So we need to use cum_prod(1 + pnl) to get cumulative capital
+            if 'pnl' in trades_df.columns:
+                # Recalculate cumulative from returns: (1 + return).cum_prod()
+                cum_capital_df = trades_df.with_columns([
+                    ((1.0 + pl.col('pnl')).cum_prod()).alias('cumulative_capital_recalc')
+                ])
+                cum_capital = cum_capital_df['cumulative_capital_recalc'].to_list()
+            elif 'cumulative_capital' in trades_df.columns:
+                # Use existing cumulative_capital (fallback)
+                cum_capital = trades_df['cumulative_capital'].to_list()
+            else:
+                # Fallback: create flat line at 1.0
+                cum_capital = [1.0] * len(trades_df)
+            
+            # Determine if overall P&L is positive or negative
+            is_profitable = cum_capital[-1] >= cum_capital[0] if len(cum_capital) > 0 else False
+            
+            # Plot cumulative capital curve
+            fig.add_trace(go.Scatter(
+                x=trades_df[x_col_pnl].to_list(),
+                y=cum_capital,
+                name='Cumulative P&L',
+                line=dict(color='green' if is_profitable else 'red', width=2.5),
+                fill='tozeroy',
+                fillcolor='rgba(0, 255, 0, 0.1)' if is_profitable else 'rgba(255, 0, 0, 0.1)',
+                mode='lines',
+                hovertemplate='<b>Cumulative P&L</b><br>Value: %{y:.4f}<br>Return: %{customdata:.2f}%<extra></extra>',
+                customdata=[(val - 1.0) * 100 for val in cum_capital]  # Return as percentage
+            ), row=current_row, col=1)
+            
+            # Add zero line reference
+            fig.add_hline(y=1.0, line_dash="dot", line_color="gray", 
+                         opacity=0.5, row=current_row, col=1,
+                         annotation_text="Break-even")
+            
+            # Add individual trade PnL as bars (optional, can be toggled)
+            if 'pnl' in trades_df.columns:
+                # Color bars: green for profit, red for loss
+                pnl_values = trades_df['pnl'].to_list()
+                bar_colors = ['green' if pnl >= 0 else 'red' for pnl in pnl_values]
+                fig.add_trace(go.Bar(
+                    x=trades_df[x_col_pnl].to_list(),
+                    y=pnl_values,
+                    name='Trade P&L',
+                    marker_color=bar_colors,
+                    opacity=0.6,
+                    showlegend=False,
+                    hovertemplate='<b>Trade P&L</b><br>PnL: %{y:.4f}<extra></extra>'
+                ), row=current_row, col=1)
+            
+            fig.update_yaxes(title_text="Cumulative P&L", row=current_row, col=1)
+            current_row += 1
+        
         # === Subplot indicators ===
         for ind in subplot_indicators:
             if isinstance(ind, RSI):
@@ -278,13 +364,22 @@ class ChartClient:
                     current_row += 1
             
             elif isinstance(ind, Stochastic):
-                if 'STOCH_K' in df.columns:
+                # Find Stochastic columns dynamically (e.g., Stoch14_3_3_K, Stoch14_3_3_D)
+                stoch_k_col = None
+                stoch_d_col = None
+                for col in df.columns:
+                    if col.startswith('Stoch') and col.endswith('_K'):
+                        stoch_k_col = col
+                        stoch_d_col = col.replace('_K', '_D')
+                        break
+                
+                if stoch_k_col and stoch_k_col in df.columns and stoch_d_col in df.columns:
                     fig.add_trace(go.Scatter(
-                        x=df[x_column], y=df['STOCH_K'],
+                        x=df[x_column], y=df[stoch_k_col],
                         name='%K', line=dict(color='blue', width=1.5)
                     ), row=current_row, col=1)
                     fig.add_trace(go.Scatter(
-                        x=df[x_column], y=df['STOCH_D'],
+                        x=df[x_column], y=df[stoch_d_col],
                         name='%D', line=dict(color='orange', width=1.5)
                     ), row=current_row, col=1)
                     
@@ -310,6 +405,56 @@ class ChartClient:
                         x=df[x_column], y=df[ind.name],
                         name=ind.name, line=dict(color='purple', width=1.5),
                     ), row=current_row, col=1)
+                    fig.update_yaxes(title_text=ind.name, row=current_row, col=1)
+                    current_row += 1
+            
+            elif isinstance(ind, ADX):
+                if ind.name in df.columns:
+                    fig.add_trace(go.Scatter(
+                        x=df[x_column], y=df[ind.name],
+                        name=ind.name, line=dict(color='teal', width=1.5),
+                    ), row=current_row, col=1)
+                    # Add reference lines for ADX interpretation
+                    fig.add_hline(y=25, line_dash="dash", line_color="orange", 
+                                 opacity=0.5, row=current_row, col=1, 
+                                 annotation_text="Trend threshold")
+                    fig.add_hline(y=40, line_dash="dash", line_color="red", 
+                                 opacity=0.5, row=current_row, col=1,
+                                 annotation_text="Strong trend")
+                    fig.update_yaxes(title_text=ind.name, row=current_row, col=1)
+                    current_row += 1
+            
+            elif isinstance(ind, WilliamsR):
+                if ind.name in df.columns:
+                    fig.add_trace(go.Scatter(
+                        x=df[x_column], y=df[ind.name],
+                        name=ind.name, line=dict(color='cyan', width=1.5),
+                    ), row=current_row, col=1)
+                    # Add reference lines for Williams %R
+                    fig.add_hline(y=-20, line_dash="dash", line_color="red", 
+                                 opacity=0.5, row=current_row, col=1,
+                                 annotation_text="Overbought")
+                    fig.add_hline(y=-80, line_dash="dash", line_color="green", 
+                                 opacity=0.5, row=current_row, col=1,
+                                 annotation_text="Oversold")
+                    fig.update_yaxes(title_text=ind.name, row=current_row, col=1)
+                    current_row += 1
+            
+            elif isinstance(ind, CCI):
+                if ind.name in df.columns:
+                    fig.add_trace(go.Scatter(
+                        x=df[x_column], y=df[ind.name],
+                        name=ind.name, line=dict(color='magenta', width=1.5),
+                    ), row=current_row, col=1)
+                    # Add reference lines for CCI
+                    fig.add_hline(y=100, line_dash="dash", line_color="red", 
+                                 opacity=0.5, row=current_row, col=1,
+                                 annotation_text="Overbought")
+                    fig.add_hline(y=-100, line_dash="dash", line_color="green", 
+                                 opacity=0.5, row=current_row, col=1,
+                                 annotation_text="Oversold")
+                    fig.add_hline(y=0, line_dash="dot", line_color="gray", 
+                                 opacity=0.3, row=current_row, col=1)
                     fig.update_yaxes(title_text=ind.name, row=current_row, col=1)
                     current_row += 1
         
@@ -429,6 +574,202 @@ class ChartClient:
                 ticklen=5,
                 row=i, col=1
             )
+        
+        fig.show()
+    
+    def plot_pnl_distribution(self, 
+                             trades_df: pl.DataFrame,
+                             symbol: str = "Strategy",
+                             theme: str = 'professional') -> None:
+        """
+        Plot PnL distribution with VaR and ES metrics (separate from temporal charts).
+        
+        Args:
+            trades_df: DataFrame with trades containing 'pnl' column
+            symbol: Symbol name for the title
+            theme: Chart theme ('professional', 'dark', or default)
+        """
+        if trades_df is None or len(trades_df) == 0:
+            print("No trades data available")
+            return
+        
+        if 'pnl' not in trades_df.columns:
+            print("No 'pnl' column found in trades_df")
+            return
+        
+        # Calculate risk metrics
+        pnl_series = trades_df['pnl']
+        risk_metrics = self.risk_client.calculate_risk_metrics(pnl_series)
+        
+        # Prepare histogram data
+        hist_data = self.risk_client.plot_pnl_distribution(pnl_series)
+        bin_centers = hist_data['bin_centers']
+        counts = hist_data['counts']
+        
+        # Create figure
+        fig = go.Figure()
+        
+        # Plot histogram
+        fig.add_trace(go.Bar(
+            x=bin_centers,
+            y=counts,
+            name='PnL Distribution',
+            marker_color='steelblue',
+            opacity=0.7,
+            hovertemplate='<b>PnL Range</b><br>Center: %{x:.4f}<br>Count: %{y}<extra></extra>'
+        ))
+        
+        # Add VaR and ES lines
+        var_95_hist = risk_metrics.get('VaR_95_historical', 0)
+        es_95_hist = risk_metrics.get('ES_95_historical', 0)
+        var_99_hist = risk_metrics.get('VaR_99_historical', 0)
+        es_99_hist = risk_metrics.get('ES_99_historical', 0)
+        
+        # VaR 95%
+        if var_95_hist < 0:  # Only show if negative (loss)
+            fig.add_vline(
+                x=var_95_hist,
+                line_dash="dash",
+                line_color="orange",
+                opacity=0.8,
+                annotation_text=f"VaR 95%: {var_95_hist:.4f}",
+                annotation_position="top"
+            )
+        
+        # ES 95%
+        if es_95_hist < 0:  # Only show if negative (loss)
+            fig.add_vline(
+                x=es_95_hist,
+                line_dash="dash",
+                line_color="red",
+                opacity=0.8,
+                annotation_text=f"ES 95%: {es_95_hist:.4f}",
+                annotation_position="top"
+            )
+        
+        # VaR 99% (more extreme)
+        if var_99_hist < 0:  # Only show if negative (loss)
+            fig.add_vline(
+                x=var_99_hist,
+                line_dash="dot",
+                line_color="darkorange",
+                opacity=0.6,
+                annotation_text=f"VaR 99%: {var_99_hist:.4f}",
+                annotation_position="top"
+            )
+        
+        # ES 99% (more extreme)
+        if es_99_hist < 0:  # Only show if negative (loss)
+            fig.add_vline(
+                x=es_99_hist,
+                line_dash="dot",
+                line_color="darkred",
+                opacity=0.6,
+                annotation_text=f"ES 99%: {es_99_hist:.4f}",
+                annotation_position="top"
+            )
+        
+        # Add zero line
+        fig.add_vline(
+            x=0,
+            line_dash="dot",
+            line_color="gray",
+            opacity=0.5
+        )
+        
+        # Add text annotation with summary statistics
+        mean_pnl = risk_metrics.get('mean', 0)
+        std_pnl = risk_metrics.get('std', 0)
+        skewness = risk_metrics.get('skewness', 0)
+        kurtosis = risk_metrics.get('kurtosis', 0)
+        var_90_hist = risk_metrics.get('VaR_90_historical', 0)
+        es_90_hist = risk_metrics.get('ES_90_historical', 0)
+        
+        stats_text = (
+            f"<b>Risk Metrics - {symbol}</b><br>"
+            f"Mean: {mean_pnl:.4f} | Std: {std_pnl:.4f}<br>"
+            f"Skewness: {skewness:.2f} | Kurtosis: {kurtosis:.2f}<br>"
+            f"VaR 90%: {var_90_hist:.4f} | ES 90%: {es_90_hist:.4f}<br>"
+            f"VaR 95%: {var_95_hist:.4f} | ES 95%: {es_95_hist:.4f}<br>"
+            f"VaR 99%: {var_99_hist:.4f} | ES 99%: {es_99_hist:.4f}"
+        )
+        
+        # Get min/max for positioning
+        pnl_min = float(trades_df['pnl'].min())
+        pnl_max = float(trades_df['pnl'].max())
+        pnl_range = pnl_max - pnl_min
+        x_pos = pnl_min + pnl_range * 0.02  # 2% from left
+        y_max = max(counts) if len(counts) > 0 else 1
+        y_pos = y_max * 0.98  # 98% from bottom
+        
+        fig.add_annotation(
+            text=stats_text,
+            x=x_pos,
+            y=y_pos,
+            xanchor="left",
+            yanchor="top",
+            showarrow=False,
+            bgcolor="rgba(255, 255, 255, 0.9)",
+            bordercolor="gray",
+            borderwidth=1,
+            font=dict(size=11)
+        )
+        
+        # Professional formatting
+        if theme == 'professional':
+            template = 'plotly_white'
+            grid_color = 'rgba(200, 200, 200, 0.3)'
+            bg_color = 'white'
+            paper_bg = '#f8f9fa'
+            font_family = 'Computer Modern, serif'
+            title_font_size = 18
+        elif theme == 'dark':
+            template = 'plotly_dark'
+            grid_color = 'rgba(100, 100, 100, 0.3)'
+            bg_color = '#111111'
+            paper_bg = '#0a0a0a'
+            font_family = 'Computer Modern, monospace'
+            title_font_size = 18
+        else:
+            template = 'plotly'
+            grid_color = 'rgba(200, 200, 200, 0.3)'
+            bg_color = 'white'
+            paper_bg = 'white'
+            font_family = 'Arial, sans-serif'
+            title_font_size = 16
+        
+        fig.update_layout(
+            title={
+                'text': f'<b>PnL Distribution & Risk Metrics - {symbol}</b>',
+                'x': 0.5,
+                'xanchor': 'center',
+                'font': {'size': title_font_size, 'family': font_family}
+            },
+            template=template,
+            height=600,
+            showlegend=False,
+            xaxis_title="PnL",
+            yaxis_title="Frequency",
+            xaxis=dict(
+                showgrid=True,
+                gridwidth=1,
+                gridcolor=grid_color,
+                showline=True,
+                linewidth=1,
+                linecolor=grid_color
+            ),
+            yaxis=dict(
+                showgrid=True,
+                gridwidth=1,
+                gridcolor=grid_color,
+                showline=True,
+                linewidth=1,
+                linecolor=grid_color
+            ),
+            plot_bgcolor=bg_color,
+            paper_bgcolor=paper_bg,
+            margin=dict(l=60, r=40, t=80, b=50)
+        )
         
         fig.show()
 

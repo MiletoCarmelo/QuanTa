@@ -40,20 +40,28 @@ class OptimizationClient:
         required = STRATEGIES_IMPLEMENTED[strategy_name]['required_indicators']
         configured = set(optimization_config['indicators'].keys())
         
-        # Automatically filter the config to keep only required indicators
-        filtered_indicators = {
-            ind_name: optimization_config['indicators'][ind_name] 
-            for ind_name in required 
-            if ind_name in optimization_config['indicators']
-        }
+        # Automatically filter the config to keep required indicators + optional ones like EngulfingPattern
+        # Optional indicators are those that can be used but are not required
+        optional_indicators = {'EngulfingPattern'}  # Add other optional indicators here if needed
+        
+        filtered_indicators = {}
+        # Add required indicators
+        for ind_name in required:
+            if ind_name in optimization_config['indicators']:
+                filtered_indicators[ind_name] = optimization_config['indicators'][ind_name]
+        
+        # Add optional indicators if present
+        for ind_name in optional_indicators:
+            if ind_name in optimization_config['indicators']:
+                filtered_indicators[ind_name] = optimization_config['indicators'][ind_name]
         
         # Check that we have all required indicators
         missing = set(required) - set(filtered_indicators.keys())
         if missing:
             raise ValueError(f"Missing indicators for {strategy_name}: {missing}")
         
-        # Display ignored indicators
-        ignored = configured - set(required)
+        # Display ignored indicators (those that are neither required nor optional)
+        ignored = configured - set(required) - optional_indicators
         if ignored:
             print(f"ℹ️  Ignored indicators (not used by '{strategy_name}'): {ignored}")
         
@@ -231,7 +239,8 @@ class OptimizationClient:
         """
         params = {
             'indicators': {},
-            'strategy': {}
+            'strategy': {},
+            'signals': {}
         }
         
         suggested_values = {}
@@ -241,6 +250,12 @@ class OptimizationClient:
             params['indicators'][indicator_name] = {}
             
             for param_name, param_config in indicator_config.get("params", {}).items():
+                # Check if parameter has a fixed value (not optimizable)
+                if "value" in param_config:
+                    # Use fixed value, don't optimize
+                    params['indicators'][indicator_name][param_name] = param_config["value"]
+                    continue
+                
                 param_type = param_config["type"]
                 full_param_name = f"{indicator_name}_{param_name}"
                 
@@ -325,6 +340,43 @@ class OptimizationClient:
             params['strategy'][param_name] = value
             suggested_values[param_name] = value
         
+        # 3. Process signal parameters (conditions for opening/closing positions)
+        for param_name, param_config in config.get("signals", {}).items():
+            param_type = param_config.get("type")
+            
+            # Check if parameter has a fixed value
+            if "value" in param_config:
+                params['signals'][param_name] = param_config["value"]
+                continue
+            
+            # Otherwise, suggest value if it has optimization range
+            if param_type == "int" and "low" in param_config and "high" in param_config:
+                value = trial.suggest_int(
+                    param_name,
+                    param_config["low"],
+                    param_config["high"],
+                    step=param_config.get("step", 1)
+                )
+                params['signals'][param_name] = value
+                suggested_values[param_name] = value
+            elif param_type == "float" and "low" in param_config and "high" in param_config:
+                value = trial.suggest_float(
+                    param_name,
+                    param_config["low"],
+                    param_config["high"],
+                    log=param_config.get("log", False),
+                    step=param_config.get("step", None)
+                )
+                params['signals'][param_name] = value
+                suggested_values[param_name] = value
+            elif param_type == "categorical" and "choices" in param_config:
+                value = trial.suggest_categorical(
+                    param_name,
+                    param_config["choices"]
+                )
+                params['signals'][param_name] = value
+                suggested_values[param_name] = value
+        
         return params
     
     def create_indicators_from_params(self, config: Dict[str, Any], params: Dict[str, Any]) -> List:
@@ -340,13 +392,14 @@ class OptimizationClient:
         """
         indicators = []
         
+        # Create indicators from params (includes both optimizable and fixed parameters)
         for indicator_name, indicator_params in params['indicators'].items():
             indicator_config = config['indicators'][indicator_name]
             indicator_class_name = indicator_config['class']
 
             if indicator_class_name not in INDICATOR_CLASSES:
                 raise ValueError(f"Indicator '{indicator_class_name}' not found in INDICATOR_CLASSES")
-
+            
             indicator_class = INDICATOR_CLASSES[indicator_class_name]
 
             # Instantiate indicator with parameters
@@ -383,6 +436,9 @@ class OptimizationClient:
         # Add strategy parameters
         flat_params.update(params['strategy'])
         
+        # Add signal parameters
+        flat_params.update(params.get('signals', {}))
+        
         # Check constraints
         for constraint in constraints:
             condition = constraint["condition"]
@@ -412,9 +468,15 @@ class OptimizationClient:
         
         strategy_info = STRATEGIES_IMPLEMENTED[strategy_name]
         expected_params = strategy_info['parameters']
+        signal_params = strategy_info.get('signal_parameters', [])
         required_indicators = strategy_info['required_indicators']
         
         backtest_params = {}
+        
+        # Map signal parameters first (conditions for opening/closing positions)
+        for signal_param in signal_params:
+            if signal_param in params.get('signals', {}):
+                backtest_params[signal_param] = params['signals'][signal_param]
         
         # Map indicator parameters
         for expected_param in expected_params:
@@ -454,6 +516,15 @@ class OptimizationClient:
             
             if not param_found:
                 raise ValueError(f"Unable to map parameter '{expected_param}' for strategy '{strategy_name}'")
+        
+        # Automatically detect if EngulfingPattern is in indicators and override use_engulfing
+        # Check in the optimization_config (which contains all configured indicators)
+        if 'EngulfingPattern' in self.optimization_config.get('indicators', {}):
+            # Override use_engulfing from signals if EngulfingPattern is present
+            backtest_params['use_engulfing'] = True
+        elif 'use_engulfing' not in backtest_params:
+            # If not in signals and EngulfingPattern not present, default to False
+            backtest_params['use_engulfing'] = False
         
         return backtest_params
 
@@ -508,23 +579,45 @@ class OptimizationClient:
             else:
                 metrics = backtest_func(df, **backtest_params)
             
-            sharpe_ratio = metrics.get("sharpe_ratio", float('-inf'))
-            # Record metrics in trial's user_attrs
-            trial.set_user_attr("total_return", metrics.get("total_return", 0.0))
-            trial.set_user_attr("cagr", metrics.get("cagr", 0.0))
-            trial.set_user_attr("max_drawdown", metrics.get("max_drawdown", 0.0))
+            # Get target metric from config (default to sharpe_ratio for backward compatibility)
+            opt_config = self.optimization_config.get("optimization", {})
+            target_metric = opt_config.get("target", "sharpe_ratio")
+            direction = opt_config.get("direction", "maximize")
+            track_metrics = opt_config.get("track_metrics", ["total_return", "cagr", "max_drawdown"])
+            
+            # Determine default value based on direction
+            # For maximize: use -inf (worst possible)
+            # For minimize: use +inf (worst possible)
+            default_value = float('-inf') if direction == "maximize" else float('inf')
+            
+            # Get the target metric value
+            target_value = metrics.get(target_metric, default_value)
+            
+            # Record all tracked metrics in trial's user_attrs
+            for metric_name in track_metrics:
+                if metric_name in metrics:
+                    trial.set_user_attr(metric_name, metrics.get(metric_name, 0.0))
+            
+            # Also record the target metric explicitly
+            trial.set_user_attr(f"target_{target_metric}", target_value)
             
             if "trades_df" in metrics:
                 trades_json = metrics["trades_df"].write_json()
                 trial.set_user_attr("trades_json", trades_json)
                 trial.set_user_attr("num_trades", len(metrics["trades_df"]))
                 
-            return sharpe_ratio if sharpe_ratio is not None else float('-inf')
+            # Return appropriate default if value is None
+            if target_value is None:
+                return default_value
+            return target_value
         
         except Exception as e:
             if getattr(self, '_verbose', True):
                 print(f"Error during backtest: {e}")
-            return float('-inf')
+            # Return worst possible value based on direction
+            opt_config = self.optimization_config.get("optimization", {})
+            direction = opt_config.get("direction", "maximize")
+            return float('-inf') if direction == "maximize" else float('inf')
     
     def optimize(self, 
                  backtest_func: Callable,
@@ -545,6 +638,28 @@ class OptimizationClient:
         opt_config = self.optimization_config["optimization"]
         indic_config = self.optimization_config["indicators"]
         strat_config = self.optimization_config["strategy"]
+        signals_config = self.optimization_config.get("signals", {})
+        
+        # Auto-determine direction based on target metric if not explicitly set
+        target_metric = opt_config.get('target', 'sharpe_ratio')
+        metrics_to_minimize = ['max_drawdown']  # Metrics that should be minimized
+        metrics_to_maximize = ['sharpe_ratio', 'total_return', 'cagr']  # Metrics that should be maximized
+        
+        # Check if direction was explicitly set in original config
+        original_opt_config = self.optimization_config.get("optimization", {})
+        direction_was_set = 'direction' in original_opt_config
+        
+        # If direction is not explicitly set, auto-determine it
+        if not direction_was_set:
+            if target_metric in metrics_to_minimize:
+                opt_config['direction'] = 'minimize'
+            elif target_metric in metrics_to_maximize:
+                opt_config['direction'] = 'maximize'
+            else:
+                # Default to maximize if unknown metric
+                opt_config['direction'] = 'maximize'
+                if verbose:
+                    print(f"⚠️  Warning: Unknown target metric '{target_metric}', defaulting to 'maximize'")
         
         # Display configuration
         if verbose:
@@ -559,8 +674,17 @@ class OptimizationClient:
             for param_name in strat_config.keys():
                 print(f"  - {param_name}")
             
-            print(f"\nNumber of trials: {opt_config['n_trials']}")
-            print(f"Direction: {opt_config['direction']}")
+            if signals_config:
+                print(f"\nSignal parameters:")
+                for param_name in signals_config.keys():
+                    print(f"  - {param_name}")
+            
+            print(f"\nOptimization target: {target_metric}")
+            direction_msg = f"Direction: {opt_config['direction']}"
+            if not direction_was_set:
+                direction_msg += " (auto-determined)"
+            print(direction_msg)
+            print(f"Number of trials: {opt_config['n_trials']}")
             print("="*70 + "\n")
         
         # Store verbose for use in objective_function_create
@@ -616,10 +740,13 @@ class OptimizationClient:
     
     def _print_results(self):
         """Display optimization results."""
+        opt_config = self.optimization_config.get("optimization", {})
+        target_metric = opt_config.get("target", "sharpe_ratio")
+        
         print("\n" + "="*70)
         print("OPTIMIZATION RESULTS")
         print("="*70)
-        print(f"\nBest Sharpe Ratio: {self.study.best_value:.4f}")
+        print(f"\nBest {target_metric}: {self.study.best_value:.4f}")
         
         print(f"\nBest parameters:")
         print("\n  Indicators:")
@@ -631,6 +758,13 @@ class OptimizationClient:
         for key, value in self.study.best_params.items():
             if key in self.optimization_config['strategy'].keys():
                 print(f"    {key}: {value}")
+        
+        signals_config = self.optimization_config.get("signals", {})
+        if signals_config:
+            print("\n  Signals:")
+            for key, value in self.study.best_params.items():
+                if key in signals_config.keys():
+                    print(f"    {key}: {value}")
                 
         print(f"\nPerformance metrics:")
         for key, value in self.study.best_trial.user_attrs.items():
@@ -674,7 +808,8 @@ class OptimizationClient:
         
         best_config = {
             'indicators': {},
-            'strategy': {}
+            'strategy': {},
+            'signals': {}
         }
         
         # Get only indicators required by strategy (not all configured ones)
@@ -683,6 +818,10 @@ class OptimizationClient:
             required_indicators = STRATEGIES_IMPLEMENTED[strategy_name]['required_indicators']
         else:
             required_indicators = list(self.optimization_config['indicators'].keys())
+        
+        # Get signal parameters from config
+        signals_config = self.optimization_config.get("signals", {})
+        strategy_config = self.optimization_config.get("strategy", {})
         
         # Iterate through all parameters of best trial
         for key, value in self.study.best_params.items():
@@ -698,8 +837,15 @@ class OptimizationClient:
                     break
             
             if not matched:
-                # It's a strategy parameter
-                best_config['strategy'][key] = value
+                # Check if it's a signal parameter
+                if key in signals_config:
+                    best_config['signals'][key] = value
+                elif key in strategy_config:
+                    # It's a strategy parameter
+                    best_config['strategy'][key] = value
+                else:
+                    # Fallback: assume it's a strategy parameter
+                    best_config['strategy'][key] = value
         
         return best_config
     
