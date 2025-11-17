@@ -1,3 +1,4 @@
+from typing import Optional
 import polars as pl
 import numpy as np
 from abc import ABC, abstractmethod
@@ -97,13 +98,47 @@ class BollingerBands(Indicator):
         return df.with_columns([
             middle.alias('BB_middle'),
             (middle + self.std_dev * std).alias('BB_upper'),
-            (middle - self.std_dev * std).alias('BB_lower')
+            (middle - self.std_dev * std).alias('BB_lower'),
+            ((pl.col(self.column) - middle) / std).alias('BB_zscore'),  # <- AJOUT
+            (( (middle + self.std_dev * std) - (middle - self.std_dev * std) ) / middle).alias('BB_bandwidth')  
         ])
     
     def get_column_names(self):
-        return ['BB_middle', 'BB_upper', 'BB_lower']
+        return ['BB_middle', 'BB_upper', 'BB_lower', 'BB_zscore', 'BB_bandwidth']
 
 
+# ========== Zscore Indicator ==========
+
+class ZScore(Indicator):
+    """Z-Score Indicator."""
+    
+    def __init__(self, period: int = 20, column: str = 'close'):
+        self.period = period
+        self.column = column
+        self.name = f'ZScore{period}'
+    
+    def calculate(self, df: pl.DataFrame) -> pl.DataFrame:
+        
+        if "BB_upper" in df.columns and "BB_middle" in df.columns:  
+            std = (pl.col('BB_upper') - pl.col('BB_middle')) / 2 
+            zscore = pl.when(std == 0).then(0).otherwise(
+                (pl.col('close') - pl.col('BB_middle')) / std
+            )
+        
+        else:      
+            mean = pl.col(self.column).rolling_mean(window_size=self.period)
+            std = pl.col(self.column).rolling_std(window_size=self.period)
+            
+            zscore = pl.when(std == 0).then(0).otherwise(
+                (pl.col(self.column) - mean) / std.fill_null(1)
+            )  
+        
+        return df.with_columns(zscore.alias(self.name))
+    
+    def get_column_names(self):
+        return [self.name]
+    
+    
 # ========== Momentum Indicators ==========
 
 class RSI(Indicator):

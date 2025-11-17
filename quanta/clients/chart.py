@@ -2,7 +2,7 @@ import polars as pl
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from typing import Optional, List
-from quanta.utils.ta import TAClient, RSI, MACD, SMA, EMA, BollingerBands, Indicator, Stochastic, ATR, Volatility, ADX, WilliamsR, CCI
+from quanta.utils.ta import TAClient, RSI, MACD, SMA, EMA, BollingerBands, Indicator, Stochastic, ATR, Volatility, ADX, WilliamsR, CCI, ZScore
 from quanta.utils.trace import Trace, Candlesticks, Volume, Line
 from quanta.clients.risk import RiskClient
 
@@ -456,6 +456,34 @@ class ChartClient:
                     fig.add_hline(y=0, line_dash="dot", line_color="gray", 
                                  opacity=0.3, row=current_row, col=1)
                     fig.update_yaxes(title_text=ind.name, row=current_row, col=1)
+                    current_row += 1
+            
+            elif isinstance(ind, ZScore):
+                if ind.name in df.columns:
+                    fig.add_trace(go.Scatter(
+                        x=df[x_column], y=df[ind.name],
+                        name=ind.name, line=dict(color='brown', width=1.5),
+                    ), row=current_row, col=1)
+                    
+                    fig.add_hline(y=2, line_dash="dash", line_color="red", 
+                                 opacity=0.5, row=current_row, col=1,
+                                 annotation_text="Overbought")
+                    fig.add_hline(y=-2, line_dash="dash", line_color="green", 
+                                 opacity=0.5, row=current_row, col=1,
+                                 annotation_text="Oversold")
+                    fig.add_hline(y=0, line_dash="dot", line_color="gray", 
+                                 opacity=0.3, row=current_row, col=1)
+                    fig.update_yaxes(title_text=ind.name, row=current_row, col=1)
+                    current_row += 1
+            
+            elif isinstance(ind, BollingerBands):
+                # Bollinger bandwidth subplot (optional)
+                if 'BB_bandwidth' in df.columns:
+                    fig.add_trace(go.Scatter(
+                        x=df[x_column], y=df['BB_bandwidth'],
+                        name='BB Bandwidth', line=dict(color='gray', width=1.5),
+                    ), row=current_row, col=1)
+                    fig.update_yaxes(title_text="BB Bandwidth", row=current_row, col=1)
                     current_row += 1
         
         # Professional formatting
