@@ -194,10 +194,6 @@ class ChartClient:
                 trades_df = trades_df.with_columns([
                     pl.col('timestamp').alias('x_value')
                 ])
-                
-            print(f"Debug: {len(trades_df)} trades after processing")
-            if len(trades_df) > 0:
-                print(trades_df.select(['timestamp', 'x_value', 'action', 'price']).head())
         
             # BUYS (green triangle up)
             buy_trades = trades_df.filter(pl.col('action') == 'BUY')
