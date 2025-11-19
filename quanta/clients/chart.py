@@ -86,6 +86,11 @@ class ChartClient:
         has_candlesticks = any(isinstance(p, Candlesticks) for p in traces)
         volume_trace = next((p for p in traces if isinstance(p, Volume)), None)
         overlay_lines = [p for p in traces if isinstance(p, Line)]
+        strategy_weight = next((p for p in traces if isinstance(p, Line) and p.name == 'strategy_weight'), None)
+        if strategy_weight:
+            strategy_weight = strategy_weight.column
+        else:
+            strategy_weight = None
         
         # Overlay indicators (SMA, EMA, BB)
         overlay_indicators = [ind for ind in indicators if isinstance(ind, (SMA, EMA, BollingerBands))]
@@ -95,11 +100,11 @@ class ChartClient:
         
         # Create subplots
         rows = 1
-        row_heights = [0.6]
+        row_heights = [0.55] 
         
         if volume_trace:
             rows += 1
-            row_heights.append(0.15)
+            row_heights.append(0.25)
         
         # Check if trades_df has PnL data for PnL subplot
         has_pnl_data = (trades_df is not None and 
@@ -191,10 +196,14 @@ class ChartClient:
                 trades_df = trades_df.rename({'x_index': 'x_value'})
                 x_col = 'x_value'
             else:
+                x_col = 'timestamp'
+                if 'datetime' in trades_df.columns:
+                    x_col = 'datetime'
+                    
                 trades_df = trades_df.with_columns([
-                    pl.col('timestamp').alias('x_value')
+                    pl.col(x_col).alias('x_value')
                 ])
-        
+    
             # BUYS (green triangle up)
             buy_trades = trades_df.filter(pl.col('action') == 'BUY')
             if len(buy_trades) > 0:
@@ -230,15 +239,17 @@ class ChartClient:
                     name='Sell',
                     hovertemplate='<b>Sell</b><br>Price: %{y:.2f}<br><extra></extra>'
                 ), row=1, col=1)
+            current_row += 1
         
         # === Volume ===
         if volume_trace:
-            colors = ['red' if close < open else 'green' 
-                     for close, open in zip(df['close'], df['open'])]
+            colors = ['#d62728' if close < open else '#2ca02c'  # Couleurs matplotlib
+                        for close, open in zip(df['close'], df['open'])]
             fig.add_trace(go.Bar(
                 x=df[x_column], y=df['volume'],
                 name='Volume',
                 marker_color=colors,
+                marker_line_width=0,  # ← Enlève les bordures
                 showlegend=False,
             ), row=current_row, col=1)
             fig.update_yaxes(title_text="Volume", row=current_row, col=1)
@@ -246,11 +257,10 @@ class ChartClient:
         
         # === PnL (Profit and Loss) ===
         if has_pnl_data:
-            # Prepare X-axis for PnL (same logic as for trades markers)
+            # Prepare X-axis for PnL
             x_col_pnl = 'x_value'
             if 'x_value' not in trades_df.columns:
                 if x_axis_type == 'row_nb':
-                    # Need to join with df to get x_index
                     if 'timestamp' in trades_df.columns:
                         trades_df = trades_df.join(
                             df.select(['datetime', 'x_index']),
@@ -260,27 +270,13 @@ class ChartClient:
                         ).rename({'x_index': 'x_value'})
                         x_col_pnl = 'x_value'
                 else:
-                    # Use timestamp directly
                     if 'timestamp' in trades_df.columns:
                         x_col_pnl = 'timestamp'
             
-            # Recalculate cumulative capital from PnL (more reliable than using pre-calculated)
-            # The 'pnl' column contains strategy_returns which are returns (not absolute PnL)
-            # So we need to use cum_prod(1 + pnl) to get cumulative capital
-            if 'pnl' in trades_df.columns:
-                # Recalculate cumulative from returns: (1 + return).cum_prod()
-                cum_capital_df = trades_df.with_columns([
-                    ((1.0 + pl.col('pnl')).cum_prod()).alias('cumulative_capital_recalc')
-                ])
-                cum_capital = cum_capital_df['cumulative_capital_recalc'].to_list()
-            elif 'cumulative_capital' in trades_df.columns:
-                # Use existing cumulative_capital (fallback)
-                cum_capital = trades_df['cumulative_capital'].to_list()
-            else:
-                # Fallback: create flat line at 1.0
-                cum_capital = [1.0] * len(trades_df)
+            # ✅ SIMPLIFIÉ: Utilise directement cumulative_capital
+            cum_capital = trades_df['cumulative_capital'].to_list()
             
-            # Determine if overall P&L is positive or negative
+            # Determine if profitable
             is_profitable = cum_capital[-1] >= cum_capital[0] if len(cum_capital) > 0 else False
             
             # Plot cumulative capital curve
@@ -293,31 +289,30 @@ class ChartClient:
                 fillcolor='rgba(0, 255, 0, 0.1)' if is_profitable else 'rgba(255, 0, 0, 0.1)',
                 mode='lines',
                 hovertemplate='<b>Cumulative P&L</b><br>Value: %{y:.4f}<br>Return: %{customdata:.2f}%<extra></extra>',
-                customdata=[(val - 1.0) * 100 for val in cum_capital]  # Return as percentage
+                customdata=[(val - 1.0) * 100 for val in cum_capital]
             ), row=current_row, col=1)
             
-            # Add zero line reference
+            # Add zero line
             fig.add_hline(y=1.0, line_dash="dot", line_color="gray", 
-                         opacity=0.5, row=current_row, col=1,
-                         annotation_text="Break-even")
+                        opacity=0.5, row=current_row, col=1,
+                        annotation_text="Break-even")
             
-            # Add individual trade PnL as bars (optional, can be toggled)
-            if 'pnl' in trades_df.columns:
-                # Color bars: green for profit, red for loss
-                pnl_values = trades_df['pnl'].to_list()
-                bar_colors = ['green' if pnl >= 0 else 'red' for pnl in pnl_values]
-                fig.add_trace(go.Bar(
-                    x=trades_df[x_col_pnl].to_list(),
-                    y=pnl_values,
-                    name='Trade P&L',
-                    marker_color=bar_colors,
-                    opacity=0.6,
-                    showlegend=False,
-                    hovertemplate='<b>Trade P&L</b><br>PnL: %{y:.4f}<extra></extra>'
-                ), row=current_row, col=1)
+            # ✅ SUPPRIME aussi les barres PnL individuelles (optionnel)
+            # Elles utilisent 'pnl' qui sont maintenant juste des returns, pas utile à afficher
             
             fig.update_yaxes(title_text="Cumulative P&L", row=current_row, col=1)
             current_row += 1
+
+        # === Strategy Weight ===
+        if strategy_weight is not None:
+            fig.add_trace(go.Scatter(
+                x=df[x_column], y=df['strategy_weight'],
+                name='Strategy Weight', line=dict(color='purple', width=1.5),
+            ), row=current_row, col=1)
+            fig.update_yaxes(title_text="Strategy Weight", row=current_row, col=1)
+            current_row += 1
+
+            
         
         # === Subplot indicators ===
         for ind in subplot_indicators:
