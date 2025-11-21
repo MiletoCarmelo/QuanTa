@@ -94,7 +94,7 @@ def clean_price_data(df: pl.DataFrame) -> pl.DataFrame:
 
 
 # %%
-def add_daily_returns(history: pl.DataFrame, method: str = 'pct') -> pl.DataFrame:
+def add_daily_returns(history: pl.DataFrame, method: str = 'log') -> pl.DataFrame:
     """
     Ajoute une colonne 'daily_return' au DataFrame
     
@@ -170,22 +170,25 @@ for sym_key, sym_value in tickers_map.items():  # Itère sur (clé, valeur)
 # Concatène tous les DataFrames
 df = pl.concat(df_list) if df_list else pl.DataFrame()
 df = clean_price_data(df)
-df = add_daily_returns(df)
+df = add_daily_returns(df, method='log')
 df
 
 
 # %%
-def get_trading_signal(history: pl.DataFrame) -> dict:
+def get_trading_signal(history: pl.DataFrame, threshold: float = 1.0) -> dict:
     """
-    TREND signal basé sur t-stat des daily returns
-    Utilise la colonne 'daily_return' pré-calculée
+    TREND signal avec double step function (Baltas & Kosowski)
+    threshold: seuil de significativité (1.96 = 95% confidence)
+    
+    Retourne:
+    - +1 si t-stat > threshold (momentum haussier significatif)
+    -  0 si |t-stat| <= threshold (pas de trend clair)
+    - -1 si t-stat < -threshold (momentum baissier significatif)
     """
     symbols = sorted(history['symbol'].unique().to_list())
     dict_results = {}
     
     for symbol in symbols:
-        
-        # Récupère les returns pour ce symbol (déjà calculés)
         returns = (
             history
             .filter(pl.col('symbol') == symbol)
@@ -196,7 +199,7 @@ def get_trading_signal(history: pl.DataFrame) -> dict:
         )
         
         if len(returns) < 2:
-            dict_results[symbol] = 0.0
+            dict_results[symbol] = 0
             continue
         
         # t-statistic
@@ -209,7 +212,15 @@ def get_trading_signal(history: pl.DataFrame) -> dict:
         else:
             t_stat = mean / (std / np.sqrt(n))
         
-        dict_results[symbol] = float(np.clip(t_stat, -1, 1))
+        # ✅ Double step function (DISCRETE)
+        if t_stat > threshold:
+            signal = 1
+        elif t_stat < -threshold:
+            signal = -1
+        else:
+            signal = 0
+        
+        dict_results[symbol] = signal
     
     return dict_results
 
@@ -344,7 +355,7 @@ def get_correlation_factor(
     ):
         """
         Calculate Correlation Factor
-        Utilise la colonne 'daily_return' pré-calculée
+        Utilise la colonne 'daily_return' pré-calculée (doit etre en log)
         """
         dtcol = "datetime" if "datetime" in history.columns else "timestamp"
         lookback_date = history[dtcol].max() - timedelta(days=window)

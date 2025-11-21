@@ -15,34 +15,44 @@ class ChartClient:
         self.risk_client = RiskClient()
     
     def plot(self, df: pl.DataFrame, symbol: str = "Stock", 
-             traces: Optional[List] = None, 
-             indicators: Optional[List] = None,
-             trades_df: Optional[pl.DataFrame] = None,
-             max_bars: Optional[int] = None, 
-             theme: str = 'professional',
-             x_axis_type: str = 'row_nb',
-             ):
-
+            traces: Optional[List] = None, 
+            indicators: Optional[List] = None,
+            trades_df: Optional[pl.DataFrame] = None,
+            max_bars: Optional[int] = None, 
+            theme: str = 'professional',
+            x_axis_type: str = 'row_nb',
+            ):
         """
         Display a chart with candlesticks and technical indicators.
-        
-        Args:
-            df: Polars DataFrame with columns 'datetime', 'open', 'high', 'low', 'close', 'volume'
-            symbol: Symbol name for the title
-            traces: List of traces [Candlesticks(), Volume(), Line('my_col')]
-            indicators: List of technical indicators [SMA(50), RSI(), MACD()]
-            trades_df: DataFrame with trades (timestamp, action, price)
-            max_bars: Maximum number of bars to display (optional)
         """
         if df is None or len(df) == 0:
             print("No data available")
             return
+        
+        # ✅ NOUVEAU: Auto-filtre le symbol si nécessaire
+        if 'symbol' in df.columns:
+            unique_symbols = df['symbol'].unique().to_list()
+            if len(unique_symbols) > 1:
+                # Multi-symbol df → filtre pour le symbol demandé
+                print(f"Multi-symbol DataFrame detected. Filtering for {symbol}...")
+                df = df.filter(pl.col('symbol') == symbol)
+                
+                if len(df) == 0:
+                    print(f"No data found for symbol {symbol}")
+                    return
+        
+        # ✅ NOUVEAU: Auto-filtre trades_df aussi
+        if trades_df is not None and len(trades_df) > 0:
+            if 'ticker' in trades_df.columns:
+                trades_df = trades_df.filter(pl.col('ticker') == symbol)
+                print(f"Filtered trades_df to {len(trades_df)} trades for {symbol}")
         
         # Check required columns
         required_cols = ['datetime', 'open', 'high', 'low', 'close', 'volume']
         if not all(col in df.columns for col in required_cols):
             print(f"DataFrame must contain columns: {required_cols}")
             return
+        
                 
         # Limit number of bars if requested
         if max_bars and len(df) > max_bars:
@@ -239,7 +249,7 @@ class ChartClient:
                     name='Sell',
                     hovertemplate='<b>Sell</b><br>Price: %{y:.2f}<br><extra></extra>'
                 ), row=1, col=1)
-            current_row += 1
+            # current_row += 1
         
         # === Volume ===
         if volume_trace:
