@@ -38,15 +38,14 @@ tickers_map = {
     'HE': 'HE=F',   # Lean Hogs
 }
 
-
-# %%
 initial = 100_000_000
 window_days = 30*120  # 12 months
 from_date = datetime.now() - timedelta(days=window_days)
 to_date = datetime.now() - timedelta(days=1)
-timeframe = "1d"
-portfolio_target_sigma = 0.43
 
+timeframe = "1d"
+
+portfolio_target_sigma = 0.43
 
 # %%
 def clean_price_data(df: pl.DataFrame) -> pl.DataFrame:
@@ -91,7 +90,6 @@ def clean_price_data(df: pl.DataFrame) -> pl.DataFrame:
     )
     
     return df
-
 
 # %%
 def add_daily_returns(history: pl.DataFrame, method: str = 'log') -> pl.DataFrame:
@@ -147,7 +145,6 @@ def add_daily_returns(history: pl.DataFrame, method: str = 'log') -> pl.DataFram
         how="left"
     )
 
-
 # %%
 # declare dataframe 
 df_list = []  # Liste pour accumuler les DataFrames
@@ -170,12 +167,11 @@ for sym_key, sym_value in tickers_map.items():  # Itère sur (clé, valeur)
 # Concatène tous les DataFrames
 df = pl.concat(df_list) if df_list else pl.DataFrame()
 df = clean_price_data(df)
-df = add_daily_returns(df, method='log')
+df = add_daily_returns(df)
 df
 
-
 # %%
-def get_trading_signal(history: pl.DataFrame, threshold: float = 1.0) -> dict:
+def get_trading_signal(history: pl.DataFrame, threshold: float = 1.00) -> dict:
     """
     TREND signal avec double step function (Baltas & Kosowski)
     threshold: seuil de significativité (1.96 = 95% confidence)
@@ -223,7 +219,6 @@ def get_trading_signal(history: pl.DataFrame, threshold: float = 1.0) -> dict:
         dict_results[symbol] = signal
     
     return dict_results
-
 
 # %%
 def get_y_z_volatility(
@@ -345,7 +340,6 @@ def get_y_z_volatility(
         
         return results
 
-
 # %%
 def get_correlation_factor(
         history: pl.DataFrame, 
@@ -419,7 +413,6 @@ def get_correlation_factor(
         
         return cf
 
-
 # %%
 def rebalance_portfolio_correct(
         history: pl.DataFrame,
@@ -467,7 +460,7 @@ def rebalance_portfolio_correct(
             return current_positions, {}
         
         # 1. Calculate components
-        trade_signals = get_trading_signal(history)
+        trade_signals = get_trading_signal(history, 0.5)
         volatility = get_y_z_volatility(history, available_symbols, data_frequency=data_frequency)
         c_f_rho_bar = get_correlation_factor(history, trade_signals, available_symbols, window=window)
         
@@ -496,7 +489,15 @@ def rebalance_portfolio_correct(
             
             # Baltas & Kosowski weight formula
             weight = (signal * portfolio_target_sigma * c_f_rho_bar) / (n_assets * vol)
-            weight = np.clip(weight, -1, 1)
+            # Mais aussi dans le calcul des weights pour le return dict:
+            weights = {
+                symbol: (
+                    (trade_signals[symbol] * portfolio_target_sigma * c_f_rho_bar) / (n_assets * volatility[i])
+                    if not np.isnan(volatility[i]) and volatility[i] != 0
+                    else 0  # ✅ Fallback
+                )
+                for i, symbol in enumerate(available_symbols)
+            }
             
             # Get last price
             last_price = history.filter(pl.col('symbol') == symbol)['close'].tail(1)[0]
@@ -530,7 +531,6 @@ def rebalance_portfolio_correct(
             'volatilities': dict(zip(available_symbols, volatility)),
             'correlation_factor': c_f_rho_bar
         }
-
 
 # %%
 
@@ -572,12 +572,10 @@ def backtest_baltas_kosowski_fractional(
         """
         results = []
         capital = initial_capital
-
         
         history_with_month = history.with_columns(
             pl.col('datetime').dt.truncate('1mo').alias('month')
         )
-
         
         months = history_with_month['month'].unique().sort()
 
@@ -592,28 +590,25 @@ def backtest_baltas_kosowski_fractional(
                 portfolio_target_sigma=portfolio_target_sigma,
                 window=window
             )
+
+            # ✅ Debug: toujours calculer
+            active_signals = sum(1 for s in details['signals'].values() if s != 0)
+            active_weights = sum(1 for w in details['weights'].values() if abs(w) > 0.0001)
+            
+            # ✅ Print seulement premiers/derniers
+            if i < 5 or i > len(months) - 10:
+                print(f"{month}: {active_signals}/16 signaux, {active_weights}/16 poids > 0.0001")
             
             weights = details['weights']
             
-            # Si un des composants est NaN, ça explique tout
+            # ✅ Si NaN volatility → SKIP au lieu de BREAK
             if any(np.isnan(v) for v in details['volatilities'].values()):
-                print("⚠️ VOLATILITY NaN detected!")
-                print(f"\n=== Month {i}: {month} ===")
-                print(f"Data points: {len(hist_until_month)}")
-                print(f"Signals: {details['signals']}")
-                print(f"Volatilities: {details['volatilities']}")
-                print(f"Weights: {details['weights']}")
-                break
+                print(f"⚠️ Skipping {month} due to NaN volatility")
+                continue  # ← CONTINUE au lieu de BREAK
             
             if np.isnan(details['correlation_factor']):
-                print("⚠️ CORRELATION FACTOR NaN detected!")
-                print(f"\n=== Month {i}: {month} ===")
-                print(f"Data points: {len(hist_until_month)}")
-                print(f"Signals: {details['signals']}")
-                print(f"Correlation Factor: {details['correlation_factor']}")
-                print(f"Weights: {details['weights']}")
-                break
-            
+                print(f"⚠️ Skipping {month} due to NaN correlation")
+                continue  # ← CONTINUE au lieu de BREAK
             
             # Determine next month boundary
             if i+1 < len(months) - 1:
@@ -626,15 +621,13 @@ def backtest_baltas_kosowski_fractional(
                 (pl.col('datetime') >= month) & 
                 (pl.col('datetime') < next_month)
             )
-
             
-            # Calculate returns using pre-computed daily_return
+            # Calculate returns
             month_returns = {}
             for symbol in weights.keys():
                 symbol_data = month_data.filter(pl.col('symbol') == symbol)
                 
                 if len(symbol_data) > 1:
-                    # ✅ Simple: prix final / prix initial - 1
                     start_price = symbol_data['close'].head(1)[0]
                     end_price = symbol_data['close'].tail(1)[0]
                     
@@ -645,7 +638,7 @@ def backtest_baltas_kosowski_fractional(
                 else:
                     month_returns[symbol] = 0
 
-            # Portfolio return = Σ(weight_i × return_i)
+            # Portfolio return
             portfolio_return = sum(
                 weights[symbol] * month_returns[symbol] 
                 for symbol in weights.keys()
@@ -662,7 +655,6 @@ def backtest_baltas_kosowski_fractional(
             })
         
         return pl.DataFrame(results)
-
 
 # %%
 # TESTE CETTE VERSION
@@ -689,69 +681,488 @@ print(f"Sharpe Ratio: {sharpe:.2f}")
 # %%
 def create_trades_from_backtest(backtest_results: pl.DataFrame, tickers: list = ['CL=F'], initial_capital: float = 100000):
     """
-    Crée des trades pour UN SEUL symbol (pour plotting)
-    VERSION CORRIGÉE
+    Version avec debug
     """
     trades_list = []
     
+    print(f"Creating trades for {len(tickers)} tickers")
+    print(f"Backtest has {len(backtest_results)} months")
+    
     for t in tickers:
         symbol_to_plot = t
+        trades_for_ticker = 0
+        
         for i, row in enumerate(backtest_results.iter_rows(named=True)):
             month = row['month']
             weights = row['weights']
-            portfolio_return = row['portfolio_return']
-            capital = row['capital']
             
-            # Weight pour le symbol spécifique
             if symbol_to_plot not in weights:
                 continue
-                
+            
             weight = weights[symbol_to_plot]
             
-            # Skip si weight trop petit
+            # ✅ DEBUG: Log tous les poids
+            if i < 5 or i > len(backtest_results) - 5:  # Premiers et derniers
+                print(f"{symbol_to_plot} @ {month}: weight={weight:.6f}")
+            
             if abs(weight) < 0.0001:
                 continue
             
-            # Action
             action = "BUY" if weight > 0 else "SELL"
             
-            # IMPORTANT: Trouve le VRAI prix du symbol à cette date
+            # IMPORTANT: Trouve le prix
             month_data = df.filter(
-                (pl.col('symbol') == symbol_to_plot) &  # ← FILTRE LE BON SYMBOL
+                (pl.col('symbol') == symbol_to_plot) &
                 (pl.col('datetime') >= month)
             )
             
             if len(month_data) == 0:
+                print(f"⚠️ No data for {symbol_to_plot} at {month}")  # ← BUG ICI?
                 continue
-                
-            price = month_data['close'].head(1)[0]  # ← PRIX RÉEL, pas weight !
+            
+            price = month_data['close'].head(1)[0]
             
             trades_list.append({
                 'ticker': symbol_to_plot,
                 'datetime': month,
                 'position_number': i,
                 'action': action,
-                'price': price,  # ← Vrai prix CL (55-75)
-                'quantity_usd': abs(weight) * capital,
+                'price': price,
+                'quantity_usd': abs(weight) * row['capital'],
                 'position_size': abs(weight),
-                'pnl': portfolio_return * capital if i > 0 else 0.0,
-                'cumulative_capital': capital / initial_capital
+                'pnl': row['portfolio_return'] * row['capital'] if i > 0 else 0.0,
+                'cumulative_capital': row['capital'] / initial_capital
             })
+            
+            trades_for_ticker += 1
+        
+        print(f"{symbol_to_plot}: {trades_for_ticker} trades created")
     
     return pl.DataFrame(trades_list)
 
+# Test
+trades_bk = create_trades_from_backtest(backtest_frac, tickers=['CL=F', 'RB=F'])
 
 # %%
 tickers = [sym_value for _, sym_value in tickers_map.items()]
+tickers
 
+# %%
 # UTILISE CETTE VERSION
 trades_bk = create_trades_from_backtest(
     backtest_frac, 
     tickers=tickers,  # ← Spécifie CL uniquement
     initial_capital=initial
 )
-trades_bk
 
+# %%
+# check if trades_bk is empty
+df.group_by('symbol').agg(
+    pl.col('datetime').max().alias('max_date'),
+    pl.col('datetime').min().alias('min_date')
+).to_pandas()
+
+
+# %%
+# check if trades_bk is empty
+trades_bk.group_by('ticker').agg(
+    pl.col('datetime').max().alias('max_date'),
+    pl.col('datetime').min().alias('min_date')
+).to_pandas()
+
+# %%
+trades_bk.group_by('ticker').agg(
+    pl.col('datetime').max().alias('max_date'),
+    pl.col('datetime').min().alias('min_date')
+)
+
+# %%
+from quanta.clients.chart import ChartClient
+chart_client = ChartClient()
+chart_client.plot(
+    df, 
+    "GC=F",  
+    trades_df=trades_bk, 
+    theme='professional',
+    x_axis_type='datetime'
+)
+
+# %%
+def plot_performance_overview(backtest_results: pl.DataFrame, initial_capital: float):
+    """
+    Page 1: Vue d'ensemble de la performance (style institutionnel)
+    """
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    import numpy as np
+    
+    months = backtest_results['month'].to_list()
+    capital = backtest_results['capital'].to_list()
+    monthly_returns = backtest_results['portfolio_return'].to_numpy()
+    
+    # Drawdowns
+    running_max = [capital[0]]
+    for c in capital[1:]:
+        running_max.append(max(running_max[-1], c))
+    drawdowns = [(c - mx) / mx * 100 for c, mx in zip(capital, running_max)]
+    
+    # 3 subplots verticaux
+    fig = make_subplots(
+        rows=3, cols=1,
+        row_heights=[0.5, 0.25, 0.25],
+        vertical_spacing=0.08,
+        subplot_titles=('Portfolio Equity Curve', 'Underwater Plot (Drawdown)', 'Monthly Returns')
+    )
+    
+    # === EQUITY CURVE ===
+    fig.add_trace(go.Scatter(
+        x=months, y=capital,
+        line=dict(color='#2E86AB', width=3),
+        fill='tozeroy',
+        fillcolor='rgba(46, 134, 171, 0.15)',
+        name='Portfolio Value',
+        hovertemplate='<b>Portfolio Value</b><br>Date: %{x|%Y-%m}<br>Value: $%{y:,.0f}<extra></extra>'
+    ), row=1, col=1)
+    
+    fig.add_hline(
+        y=initial_capital,
+        line=dict(dash="dash", color="gray", width=2),
+        annotation=dict(text="Initial Capital", font=dict(size=11)),
+        row=1, col=1
+    )
+    
+    # === DRAWDOWN ===
+    fig.add_trace(go.Scatter(
+        x=months, y=drawdowns,
+        line=dict(color='#A23B72', width=2.5),
+        fill='tozeroy',
+        fillcolor='rgba(162, 59, 114, 0.2)',
+        name='Drawdown',
+        hovertemplate='<b>Drawdown</b><br>Date: %{x|%Y-%m}<br>DD: %{y:.2f}%<extra></extra>'
+    ), row=2, col=1)
+    
+    fig.add_hline(y=0, line=dict(dash="dot", color="gray", width=1), row=2, col=1)
+    
+    # === MONTHLY RETURNS BAR ===
+    colors = ['#2E7D32' if r > 0 else '#C62828' for r in monthly_returns]
+    
+    fig.add_trace(go.Bar(
+        x=months,
+        y=monthly_returns * 100,
+        marker_color=colors,
+        marker_line_width=0,
+        name='Monthly Returns',
+        hovertemplate='<b>Monthly Return</b><br>Date: %{x|%Y-%m}<br>Return: %{y:.2f}%<extra></extra>'
+    ), row=3, col=1)
+    
+    fig.add_hline(y=0, line=dict(dash="dot", color="gray", width=1), row=3, col=1)
+    
+    # === METRICS BOX ===
+    mean_ret = np.mean(monthly_returns) * 100
+    std_ret = np.std(monthly_returns) * 100
+    sharpe = (np.mean(monthly_returns) / np.std(monthly_returns)) * np.sqrt(12)
+    final_return = (capital[-1] - initial_capital) / initial_capital * 100
+    max_dd = min(drawdowns)
+    
+    metrics_text = (
+        f"<b>PERFORMANCE METRICS</b><br><br>"
+        f"<b>Returns</b><br>"
+        f"Total Return: <b>{final_return:+.2f}%</b><br>"
+        f"Annualized: <b>{(((capital[-1]/initial_capital)**(12/len(months)))-1)*100:+.2f}%</b><br>"
+        f"Monthly Avg: <b>{mean_ret:+.2f}%</b><br><br>"
+        f"<b>Risk</b><br>"
+        f"Volatility: <b>{std_ret:.2f}%</b><br>"
+        f"Max Drawdown: <b>{max_dd:.2f}%</b><br>"
+        f"Sharpe Ratio: <b>{sharpe:.2f}</b><br><br>"
+        f"<b>Trading</b><br>"
+        f"Months: <b>{len(months)}</b><br>"
+        f"Best Month: <b>{monthly_returns.max()*100:+.2f}%</b><br>"
+        f"Worst Month: <b>{monthly_returns.min()*100:+.2f}%</b>"
+    )
+    
+    fig.add_annotation(
+        text=metrics_text,
+        xref="paper", yref="paper",
+        x=1.15, y=0.95,
+        xanchor='left', yanchor='top',
+        showarrow=False,
+        bgcolor="rgba(250, 250, 250, 0.98)",
+        bordercolor="#2E86AB",
+        borderwidth=2,
+        font=dict(size=11, family="Arial"),
+        align='left'
+    )
+    
+    # === LAYOUT ===
+    fig.update_layout(
+        title={
+            'text': '<b>BALTAS & KOSOWSKI MOMENTUM STRATEGY</b><br><sup>Performance Analysis Report</sup>',
+            'x': 0.5,
+            'xanchor': 'center',
+            'font': {'size': 22, 'family': 'Arial', 'color': '#1a1a1a'}
+        },
+        height=1000,
+        template='plotly_white',
+        showlegend=False,
+        font=dict(family="Arial", size=11),
+        margin=dict(l=80, r=250, t=100, b=60)
+    )
+    
+    # Axes styling
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(200,200,200,0.3)')
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(200,200,200,0.3)')
+    
+    fig.update_yaxes(title_text="Portfolio Value ($)", row=1, col=1, title_font=dict(size=12))
+    fig.update_yaxes(title_text="Drawdown (%)", row=2, col=1, title_font=dict(size=12))
+    fig.update_yaxes(title_text="Return (%)", row=3, col=1, title_font=dict(size=12))
+    fig.update_xaxes(title_text="Date", row=3, col=1, title_font=dict(size=12))
+    
+    fig.show()
+
+
+plot_performance_overview(backtest_frac, initial)
+
+# %%
+def plot_risk_analysis(backtest_results: pl.DataFrame):
+    """
+    Page 2: Analyse de risque détaillée
+    """
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    import numpy as np
+    
+    monthly_returns = backtest_results['portfolio_return'].to_numpy()
+    months = backtest_results['month'].to_list()
+    
+    # Rolling metrics
+    window = 12
+    rolling_sharpe = []
+    rolling_vol = []
+    
+    for i in range(len(monthly_returns)):
+        if i < window:
+            rolling_sharpe.append(None)
+            rolling_vol.append(None)
+        else:
+            window_rets = monthly_returns[i-window:i]
+            mean_r = np.mean(window_rets)
+            std_r = np.std(window_rets)
+            rolling_sharpe.append((mean_r / std_r * np.sqrt(12)) if std_r > 0 else 0)
+            rolling_vol.append(std_r * np.sqrt(12) * 100)
+    
+    # 2x2 layout
+    fig = make_subplots(
+        rows=2, cols=2,
+        row_heights=[0.5, 0.5],
+        column_widths=[0.6, 0.4],
+        subplot_titles=(
+            'Returns Distribution', 
+            'Risk Metrics',
+            '12-Month Rolling Sharpe Ratio',
+            '12-Month Rolling Volatility'
+        ),
+        specs=[
+            [{"type": "histogram"}, {"type": "box"}],
+            [{"type": "scatter"}, {"type": "scatter"}]
+        ],
+        vertical_spacing=0.12,
+        horizontal_spacing=0.12
+    )
+    
+    # === HISTOGRAM ===
+    fig.add_trace(go.Histogram(
+        x=monthly_returns * 100,
+        nbinsx=25,
+        marker_color='#2E86AB',
+        marker_line_color='white',
+        marker_line_width=1,
+        opacity=0.8,
+        name='Returns',
+        hovertemplate='<b>Return Range</b><br>%{x:.1f}%<br>Count: %{y}<extra></extra>'
+    ), row=1, col=1)
+    
+    # Normal distribution overlay
+    mean = np.mean(monthly_returns * 100)
+    std = np.std(monthly_returns * 100)
+    x_norm = np.linspace(mean - 3*std, mean + 3*std, 100)
+    y_norm = len(monthly_returns) * (monthly_returns.max() - monthly_returns.min()) * 100 / 25 * \
+              np.exp(-0.5 * ((x_norm - mean) / std) ** 2) / (std * np.sqrt(2 * np.pi))
+    
+    fig.add_trace(go.Scatter(
+        x=x_norm, y=y_norm,
+        line=dict(color='#A23B72', width=3, dash='dash'),
+        name='Normal Dist.',
+        hovertemplate='Normal Distribution<extra></extra>'
+    ), row=1, col=1)
+    
+    # === BOX PLOT ===
+    fig.add_trace(go.Box(
+        y=monthly_returns * 100,
+        marker_color='#2E86AB',
+        boxmean='sd',
+        name='Returns',
+        hovertemplate='<b>Statistics</b><br>Value: %{y:.2f}%<extra></extra>'
+    ), row=1, col=2)
+    
+    # === ROLLING SHARPE ===
+    fig.add_trace(go.Scatter(
+        x=months, y=rolling_sharpe,
+        line=dict(color='#6A4C93', width=3),
+        fill='tonexty',
+        name='Rolling Sharpe',
+        hovertemplate='<b>12M Sharpe</b><br>%{x|%Y-%m}<br>Sharpe: %{y:.2f}<extra></extra>'
+    ), row=2, col=1)
+    
+    fig.add_hline(y=0, line=dict(dash="dash", color="gray", width=2), row=2, col=1)
+    fig.add_hline(y=1, line=dict(dash="dot", color="green", width=1), 
+                 annotation=dict(text="Target", font=dict(size=10)), row=2, col=1)
+    
+    # === ROLLING VOL ===
+    fig.add_trace(go.Scatter(
+        x=months, y=rolling_vol,
+        line=dict(color='#F18F01', width=3),
+        fill='tozeroy',
+        fillcolor='rgba(241, 143, 1, 0.2)',
+        name='Rolling Vol',
+        hovertemplate='<b>12M Volatility</b><br>%{x|%Y-%m}<br>Vol: %{y:.2f}%<extra></extra>'
+    ), row=2, col=2)
+    
+    # === LAYOUT ===
+    fig.update_layout(
+        title={
+            'text': '<b>RISK ANALYSIS</b><br><sup>Statistical Distribution & Rolling Metrics</sup>',
+            'x': 0.5,
+            'xanchor': 'center',
+            'font': {'size': 22, 'family': 'Arial'}
+        },
+        height=900,
+        template='plotly_white',
+        showlegend=False,
+        font=dict(family="Arial", size=11)
+    )
+    
+    fig.update_xaxes(title_text="Monthly Return (%)", row=1, col=1)
+    fig.update_yaxes(title_text="Frequency", row=1, col=1)
+    fig.update_yaxes(title_text="Return (%)", row=1, col=2)
+    fig.update_yaxes(title_text="Sharpe Ratio", row=2, col=1)
+    fig.update_yaxes(title_text="Volatility (%)", row=2, col=2)
+    
+    fig.show()
+
+plot_risk_analysis(backtest_frac)
+
+# %%
+def plot_allocation_analysis(backtest_results: pl.DataFrame):
+    """
+    Page 3: Analyse de l'allocation du portfolio
+    """
+    import plotly.graph_objects as go
+    
+    months = backtest_results['month'].to_list()
+    
+    # Prepare heatmap data
+    tickers_data = {}
+    for row in backtest_results.iter_rows(named=True):
+        for ticker, weight in row['weights'].items():
+            if ticker not in tickers_data:
+                tickers_data[ticker] = []
+            tickers_data[ticker].append(weight)
+    
+    tickers = sorted(tickers_data.keys())
+    z_data = [tickers_data[t] for t in tickers]
+    
+    fig = go.Figure(data=go.Heatmap(
+        z=z_data,
+        x=[m.strftime('%Y-%m') for m in months],
+        y=tickers,
+        colorscale=[
+            [0.0, '#8B0000'],   # Dark red (short)
+            [0.25, '#FF6B6B'],  # Light red
+            [0.5, '#FFFFFF'],   # White (neutral)
+            [0.75, '#4ECDC4'],  # Light green
+            [1.0, '#006400']    # Dark green (long)
+        ],
+        zmid=0,
+        colorbar=dict(
+            title=dict(
+                text="<b>Position<br>Weight</b>",
+                side="right"  # ✅ Fix: side au lieu de titleside
+            ),
+            tickmode="linear",
+            tick0=-0.5,
+            dtick=0.25,
+            thickness=20,
+            len=0.7
+        ),
+        hovertemplate='<b>%{y}</b><br>Date: %{x}<br>Weight: %{z:.3f}<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title={
+            'text': '<b>PORTFOLIO ALLOCATION OVER TIME</b><br><sup>Monthly Rebalancing Heatmap</sup>',
+            'x': 0.5,
+            'xanchor': 'center',
+            'font': {'size': 22, 'family': 'Arial'}
+        },
+        height=max(600, len(tickers) * 40),
+        template='plotly_white',
+        xaxis_title="<b>Date</b>",
+        yaxis_title="<b>Commodity</b>",
+        font=dict(family="Arial", size=12),
+        xaxis=dict(
+            tickangle=-45,
+            showgrid=False
+        ),
+        yaxis=dict(
+            showgrid=False,
+            categoryorder='category ascending'
+        )
+    )
+    
+    fig.show()
+
+plot_allocation_analysis(backtest_frac)
+
+# %%
+df_cl = df_cl.with_columns([
+    pl.lit(details['signals']['CL=F']).alias('momentum_signal')
+])
+
+signals_over_time = []
+for row in backtest_frac.iter_rows(named=True):
+    signals_dict = row['weights']  # C'est un dict {'CL=F': 0.16, 'RB=F': -0.21}
+    signals_over_time.append({
+        'datetime': row['month'] + timedelta(hours=6),
+        'signal': signals_dict.get('CL=F', 0)  # ← Extract CL=F weight
+    })
+
+signals_df = pl.DataFrame(signals_over_time)
+
+# full join on datetime
+df_cl = df_cl.join(signals_df, on='datetime', how='left').fill_null(strategy='forward').sort('datetime')
+
+
+weights_over_time = []
+for row in backtest_frac.iter_rows(named=True):
+    weights_over_time.append({
+        'datetime': row['month'] + timedelta(hours=6),
+        'strategy_weight': row['weights']['CL=F']
+    })
+
+weights_df = pl.DataFrame(weights_over_time)
+
+# 2. Join avec df_cl
+df_cl = df_cl.join(weights_df, on='datetime', how='left').fill_null(strategy='forward')
+
+
+
+# %%
+traces = [
+    Candlesticks(),
+    Line('strategy_weight', name='Strategy Weight', color='purple'),
+    Volume()
+]
+traces
 
 # %%
 from quanta.clients.chart import ChartClient
@@ -760,6 +1171,15 @@ chart_client.plot(
     df_cl, 
     "cl=F",  
     trades_df=trades_bk, 
+    traces=traces,
     theme='professional',
     x_axis_type='datetime'
 )
+
+# %%
+
+
+# %%
+
+
+
